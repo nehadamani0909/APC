@@ -32,3 +32,7 @@ def test_grid_is_idempotent_and_resumable(tmp_path: Path) -> None:
     assert runner.run([cell]) == 0
     assert len(read_ledger(ledger.path)) == 1
     assert validate_ledger(ledger.path)
+
+    (tmp_path / "completed.jsonl").unlink()
+    resumed = GridRunner(ledger, tmp_path / "completed.jsonl")
+    assert resumed.run([cell]) == 0

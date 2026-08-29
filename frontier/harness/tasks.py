@@ -152,12 +152,12 @@ class ShareGPTTask(JsonlTask):
 
 
 LONGBENCH_SUBSETS = (
-    "narrativeqa",
-    "qasper",
-    "multifieldqa_en",
-    "hotpotqa",
-    "2wikimqa",
-    "musique",
+    "multidoc_qa",
+    "single_doc_qa",
+    "summarisation",
+    "few_shot",
+    "code",
+    "synthetic",
 )
 
 

@@ -86,22 +86,28 @@ def _labels(frame: pd.DataFrame, epsilon: float) -> pd.DataFrame:
 
 def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float:
     values: list[float] = []
+    rng = random.Random(0)
     for prompt_id, prompt_frame in frame.groupby("prompt_id"):
-        halves = []
-        for parity in (0, 1):
-            half = prompt_frame[prompt_frame["sample_idx"] % 2 == parity]
-            quality = _quality_map(half)
-            if len(quality) != len(BUDGETS):
-                continue
-            halves.append(
-                _budget_label(
-                    {rate: quality[(str(prompt_id), rate)] for rate in BUDGETS},
-                    epsilon,
-                    False,
+        sample_indices = sorted(prompt_frame["sample_idx"].unique().tolist())
+        if len(sample_indices) < 2:
+            continue
+        for _ in range(100):
+            first_indices = set(rng.sample(sample_indices, len(sample_indices) // 2))
+            halves = []
+            for selected in (first_indices, set(sample_indices) - first_indices):
+                half = prompt_frame[prompt_frame["sample_idx"].isin(selected)]
+                quality = _quality_map(half)
+                if len(quality) != len(BUDGETS):
+                    break
+                halves.append(
+                    _budget_label(
+                        {rate: quality[(str(prompt_id), rate)] for rate in BUDGETS},
+                        epsilon,
+                        False,
+                    )
                 )
-            )
-        if len(halves) == 2:
-            values.append((halves[0] - halves[1]) ** 2 / 2.0)
+            if len(halves) == 2:
+                values.append((halves[0] - halves[1]) ** 2 / 2.0)
     return float(pd.Series(values).mean()) if values else 0.0
 
 
@@ -121,7 +127,7 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
     ]
     report.append("## Gate test")
     report.append("")
-    passed_any = False
+    passed_all = True
     for epsilon, labels in labels_by_epsilon.items():
         report.append(f"### ε = {epsilon:.2f}")
         report.append("")
@@ -130,16 +136,22 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
             variance, ci_low, ci_high = _bootstrap_variance(values)
             noise = _noise_floor(frame[frame["family"] == family], epsilon)
             passed = ci_low > 2.0 * noise
-            passed_any = passed_any or passed
+            passed_all = passed_all and passed
             report.append(
                 f"- {family}: Var[b*]={variance:.6f}; bootstrap CI="
                 f"[{ci_low:.6f}, {ci_high:.6f}]; σ²_noise={noise:.6f}; "
                 f"threshold={2.0 * noise:.6f}; **{'PASS' if passed else 'FAIL'}**"
             )
+        gaps = (labels["b_star"] - labels["b_star_naive"]).abs().tolist()
         disagreement = float((labels["b_star"] != labels["b_star_naive"]).mean())
-        report.append(f"- E1b non-monotonicity disagreement: {disagreement:.4f}")
+        gap_mean, gap_low, gap_high = _mean_ci(gaps)
+        report.append(
+            f"- E1b non-monotonicity disagreement: {disagreement:.4f}; "
+            f"mean absolute budget gap={gap_mean:.4f} "
+            f"(95% bootstrap CI [{gap_low:.4f}, {gap_high:.4f}])"
+        )
         report.append("")
-    report.append(f"## Overall Gate 1 result: **{'PASS' if passed_any else 'FAIL'}**")
+    report.append(f"## Overall Gate 1 result: **{'PASS' if passed_all else 'FAIL'}**")
     report.append("")
     report.append("## E1c rate adherence")
     report.append("")

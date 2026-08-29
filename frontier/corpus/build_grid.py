@@ -16,6 +16,10 @@ from frontier.harness.prices import PRICE_TABLE_VERSION, cost_from_tokens
 from frontier.harness.tasks import Instance, Task
 
 
+def _canonical_rate(rate: float) -> str:
+    return f"{float(rate):.8f}"
+
+
 @dataclass(frozen=True)
 class GridCell:
     instance: Instance
@@ -33,7 +37,7 @@ class GridCell:
             (
                 self.instance.id,
                 self.backend.name,
-                str(self.requested_b),
+                _canonical_rate(self.requested_b),
                 self.target.model,
                 str(self.sample_idx),
             )
@@ -67,7 +71,7 @@ class GridRunner:
                     (
                         str(row["prompt_id"]),
                         str(row["backend"]),
-                        str(row["requested_b"]),
+                        _canonical_rate(row["requested_b"]),
                         str(row["target_model"]),
                         str(row["sample_idx"]),
                     )
