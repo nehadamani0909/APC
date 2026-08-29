@@ -26,6 +26,7 @@ dev = [
 frontier-validate = "frontier.corpus.validate:main"
 frontier-features = "frontier.features.registry:main"
 frontier-train = "frontier.predict.train:main"
+frontier-crc-report = "scripts.07_crc_report:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["frontier"]

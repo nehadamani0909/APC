@@ -10,7 +10,7 @@ from frontier.compress.baselines import TruncateTailCompressor
 from frontier.corpus.build_grid import GridCell, GridRunner, cell_count, dry_run
 from frontier.harness.ledger import Ledger
 from frontier.harness.models import GenerationResult
-from frontier.harness.tasks import Instance, JsonlTask
+from frontier.harness.tasks import Family, Instance, JsonlTask
 
 RATES = (1.0, 0.8, 0.65, 0.5, 0.4, 0.3, 0.2)
 
@@ -39,7 +39,7 @@ class PilotTarget:
 
 
 def _instances() -> list[tuple[JsonlTask, Instance]]:
-    definitions = (
+    definitions: tuple[tuple[str, Family], ...] = (
         ("pilot_qa", "qa"),
         ("pilot_multidoc", "multidoc_qa"),
         ("pilot_summ", "summ"),

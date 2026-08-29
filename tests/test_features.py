@@ -1,4 +1,5 @@
 import pandas as pd
+from pytest import MonkeyPatch
 
 from frontier.features.encoder import EncoderExtractor
 from frontier.features.registry import extract_records
@@ -37,8 +38,8 @@ def test_l0_registry_writes_prompt_keyed_frame() -> None:
     assert "latency_ms" in frame
 
 
-def test_features_do_not_call_target_llm(monkeypatch) -> None:
-    def fail(*args, **kwargs):
+def test_features_do_not_call_target_llm(monkeypatch: MonkeyPatch) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
         raise AssertionError("target LLM called")
 
     monkeypatch.setattr("frontier.harness.models.APIBackend.generate", fail)

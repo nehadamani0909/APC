@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from frontier.harness.tasks import (
     LONGBENCH_SUBSETS,
     GSM8KTask,
@@ -17,7 +19,7 @@ def test_registry_and_separate_context_query() -> None:
         assert all(instance.context and instance.query for instance in instances)
 
 
-def test_jsonl_records_are_loaded(tmp_path) -> None:
+def test_jsonl_records_are_loaded(tmp_path: Path) -> None:
     source = tmp_path / "task.jsonl"
     source.write_text(
         '{"id":"x","context":"ctx","query":"q","gold":"a","split":"test"}\n',
