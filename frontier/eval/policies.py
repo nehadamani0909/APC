@@ -43,6 +43,10 @@ def evaluate_policy(
 
 def smoke_table() -> list[PolicySummary]:
     rows = [("context " * 20, "question", "qa"), ("short", "question", "summ")]
+    return table_for_rows(rows)
+
+
+def table_for_rows(rows: Iterable[tuple[str, str, str]]) -> list[PolicySummary]:
     return [
         evaluate_policy(name, policy, rows)
         for name, policy in all_policies().items()

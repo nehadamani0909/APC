@@ -1,0 +1,8 @@
+{
+  "method": "temperature",
+  "temperature": 1.0,
+  "lambda_hat": 1.0,
+  "calibration_split": "D_cal_a",
+  "crc_split": "D_cal_b",
+  "status": "placeholder constants for offline fixture release"
+}
