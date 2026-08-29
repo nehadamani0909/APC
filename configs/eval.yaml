@@ -1,0 +1,4 @@
+corpus: data/corpus/v1/corpus.parquet
+policies: all
+bootstrap_resamples: 10000
+price_table_version: v1

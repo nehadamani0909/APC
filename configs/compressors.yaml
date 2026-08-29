@@ -1,0 +1,2 @@
+backends: [llmlingua2, longllmlingua, cpc, truncate_tail, truncate_head]
+target_tokenizer: provider-reported

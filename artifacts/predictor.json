@@ -1,9 +1,66 @@
 {
   "artifact": "frontier-predictor",
-  "version": "offline-fixture-v1",
+  "version": "corpus-fit-v1",
   "feature_tier": "L0",
-  "budgets": [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0],
+  "features": [
+    "context_token_count",
+    "sentence_count",
+    "type_token_ratio",
+    "bigram_repetition_rate",
+    "gzip_compression_ratio",
+    "digit_ratio",
+    "code_token_ratio",
+    "punctuation_ratio",
+    "average_sentence_length",
+    "query_token_count",
+    "query_context_overlap"
+  ],
+  "budgets": [
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.65,
+    0.8,
+    1.0
+  ],
   "training_split": "D_train",
-  "status": "deterministic scaffold; not trained on real benchmark data",
-  "seed": 0
+  "prompt_count": 200,
+  "quality_base_weights": [
+    -2.7037897325193573e-06,
+    -3.0042108139103937e-07,
+    -1.491745044990285e-07,
+    -1.3259976382963123e-07,
+    -5.075124506341575e-13,
+    -7.614450349606586e-14,
+    0.0,
+    -4.562987602044384e-12,
+    -2.7037897325193556e-06,
+    -3.0042108139103963e-07,
+    -3.0042108139103963e-07
+  ],
+  "quality_base_bias": -3.0042108139103963e-07,
+  "quality_increment_bias": [
+    0.0001,
+    0.0001,
+    0.0001,
+    9.210290369475985,
+    0.0001,
+    0.0001
+  ],
+  "output_weights": [
+    0.06513540264695389,
+    0.007237266960772634,
+    0.003593677387401568,
+    0.0031943798999458533,
+    3.0914566420599956e-14,
+    1.4801479986841613e-14,
+    0.0,
+    2.786859825557327e-13,
+    0.06513540264695383,
+    0.0072372669607726516,
+    0.0072372669607726516
+  ],
+  "output_bias": 0.0072372669607726516,
+  "status": "trained on committed corpus artifact"
 }

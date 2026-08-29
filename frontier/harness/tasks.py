@@ -161,14 +161,19 @@ LONGBENCH_SUBSETS = (
 )
 
 
-def default_tasks() -> list[Task]:
-    """Return the P1 task registry in a stable order."""
+def default_tasks(source_dir: str | Path | None = None) -> list[Task]:
+    """Return tasks, using normalized JSONL sources when a directory is set."""
+    root = Path(source_dir) if source_dir is not None else None
+
+    def source(name: str) -> Path | None:
+        candidate = root / f"{name}.jsonl" if root is not None else None
+        return candidate if candidate is not None and candidate.exists() else None
 
     return [
-        GSM8KTask(),
-        *(LongBenchTask(subset) for subset in LONGBENCH_SUBSETS),
-        MeetingBankTask(),
-        HumanEvalTask(),
-        MBPPTask(),
-        ShareGPTTask(),
+        GSM8KTask(source("gsm8k")),
+        *(LongBenchTask(subset, source=source(subset)) for subset in LONGBENCH_SUBSETS),
+        MeetingBankTask(source("meetingbank")),
+        HumanEvalTask(source("humaneval")),
+        MBPPTask(source("mbpp")),
+        ShareGPTTask(source("sharegpt")),
     ]

@@ -39,6 +39,29 @@ class CumulativeLogitHead:
         )
         return _sigmoid(logits)
 
+    def fit(self, features: Array, labels: Array) -> None:
+        """Fit a deterministic monotone approximation to curve labels.
+
+        The production implementation can replace this optimizer, but the
+        parameterization is already the ordinal cumulative-logit form: every
+        increment is stored in unconstrained space and passed through
+        ``softplus`` at prediction time.
+        """
+        if labels.shape[1] != len(BUDGETS):
+            raise ValueError("one label column is required per budget")
+        monotone = np.maximum.accumulate(labels, axis=1)
+        logits = np.log(
+            np.clip(monotone, 1e-4, 1.0 - 1e-4) / np.clip(1.0 - monotone, 1e-4, 1.0)
+        )
+        design = np.column_stack((features, np.ones(len(features))))
+        coefficients, *_ = np.linalg.lstsq(design, logits[:, 0], rcond=None)
+        self.base_weights = coefficients[:-1]
+        self.base_bias = float(coefficients[-1])
+        mean_logits = logits.mean(axis=0)
+        increments = np.maximum(1e-4, np.diff(mean_logits, prepend=mean_logits[0]))[1:]
+        self.increment_bias = np.asarray(increments, dtype=float)
+        self.increment_weights.fill(0.0)
+
 
 class FreeFormHead:
     """Non-monotone H1 ablation with the same vector interface."""
@@ -50,6 +73,15 @@ class FreeFormHead:
 
     def predict(self, features: Array) -> Array:
         return _sigmoid(features @ self.weights.T + self.bias)
+
+    def fit(self, features: Array, labels: Array) -> None:
+        design = np.column_stack((features, np.ones(len(features))))
+        logits = np.log(
+            np.clip(labels, 1e-4, 1.0 - 1e-4) / np.clip(1.0 - labels, 1e-4, 1.0)
+        )
+        coefficients, *_ = np.linalg.lstsq(design, logits, rcond=None)
+        self.weights = coefficients[:-1].T
+        self.bias = coefficients[-1]
 
 
 class BudgetClassifier:
@@ -65,6 +97,14 @@ class BudgetClassifier:
         logits -= logits.max(axis=1, keepdims=True)
         probabilities = np.exp(logits)
         return cast(Array, probabilities / probabilities.sum(axis=1, keepdims=True))
+
+    def fit(self, features: Array, labels: Array) -> None:
+        classes = np.argmax(labels, axis=1)
+        design = np.column_stack((features, np.ones(len(features))))
+        targets = np.eye(len(BUDGETS))[classes]
+        coefficients, *_ = np.linalg.lstsq(design, targets, rcond=None)
+        self.weights = coefficients[:-1].T
+        self.bias = coefficients[-1]
 
 
 class RateAdherenceHead:
@@ -108,6 +148,14 @@ class OutputLengthHead:
             Array,
             np.broadcast_to(length[:, None], (len(features), len(BUDGETS))).copy(),
         )
+
+    def fit(self, features: Array, output_tokens: Array) -> None:
+        design = np.column_stack((features, np.ones(len(features))))
+        coefficients, *_ = np.linalg.lstsq(
+            design, np.log(np.maximum(output_tokens, 1.0)).mean(axis=1), rcond=None
+        )
+        self.weights = coefficients[:-1]
+        self.bias = float(coefficients[-1])
 
 
 @dataclass

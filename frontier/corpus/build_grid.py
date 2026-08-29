@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,9 +53,11 @@ class GridRunner:
         self,
         ledger: Ledger,
         completion_index: str | Path,
+        failure_index: str | Path | None = None,
     ) -> None:
         self.ledger = ledger
         self.completion_index = Path(completion_index)
+        self.failure_index = Path(failure_index) if failure_index is not None else None
         self.completed = self._read_completed()
 
     def _read_completed(self) -> set[str]:
@@ -85,20 +88,31 @@ class GridRunner:
             handle.write(json.dumps({"key": cell.key}) + "\n")
         self.completed.add(cell.key)
 
+    def _mark_failed(self, cell: GridCell, error: Exception) -> None:
+        if self.failure_index is None:
+            return
+        self.failure_index.parent.mkdir(parents=True, exist_ok=True)
+        with self.failure_index.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"key": cell.key, "error": str(error)}) + "\n")
+
     def run(self, cells: Iterable[GridCell]) -> int:
         executed = 0
         for cell in cells:
             if cell.key in self.completed:
                 continue
-            compressed = cell.backend.compress(
-                cell.instance.context, cell.instance.query, cell.requested_b
-            )
-            prompt = cell.task.build_prompt(
-                compressed.compressed_text, cell.instance.query
-            )
-            generation = cell.target.generate(
-                prompt, temperature=cell.temperature, seed=cell.seed
-            )
+            try:
+                compressed = cell.backend.compress(
+                    cell.instance.context, cell.instance.query, cell.requested_b
+                )
+                prompt = cell.task.build_prompt(
+                    compressed.compressed_text, cell.instance.query
+                )
+                generation = cell.target.generate(
+                    prompt, temperature=cell.temperature, seed=cell.seed
+                )
+            except Exception as error:
+                self._mark_failed(cell, error)
+                continue
             usd_in, usd_out, usd_total = cost_from_tokens(
                 cell.target.model,
                 generation.T_in,
@@ -137,6 +151,15 @@ class GridRunner:
             self._mark_completed(cell)
             executed += 1
         return executed
+
+    def run_parallel(self, cells: Iterable[GridCell], workers: int = 1) -> int:
+        """Run independent cells concurrently while preserving idempotence."""
+        if workers <= 1:
+            return self.run(cells)
+        pending = [cell for cell in cells if cell.key not in self.completed]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(self.run, [cell]) for cell in pending]
+            return sum(future.result() for future in as_completed(futures))
 
 
 def cell_count(

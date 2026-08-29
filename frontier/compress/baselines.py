@@ -25,6 +25,22 @@ class TruncateTailCompressor(TextCompressor):
         return " ".join(words[: round(len(words) * rate)]), 0.0
 
 
+class TruncateHeadCompressor(TextCompressor):
+    """Deterministic head truncation used for backend-transfer controls."""
+
+    name = "truncate_head"
+    backend_version = "v1"
+    model_version = "deterministic-v1"
+
+    def _compress_text(
+        self, ctx: str, query: str | None, rate: float
+    ) -> tuple[str, float]:
+        validate_rate(rate)
+        words = _words(ctx)
+        keep = round(len(words) * rate)
+        return " ".join(words[-keep:] if keep else []), 0.0
+
+
 class RandomDropCompressor(TextCompressor):
     name = "random_drop"
     backend_version = "v1"

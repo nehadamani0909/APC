@@ -1,0 +1,6 @@
+feature_tier: L0
+train_split: D_train
+calibration_split: D_cal_a
+crc_split: D_cal_b
+seed: 0
+artifact: artifacts/predictor.json
