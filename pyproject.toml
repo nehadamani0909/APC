@@ -28,6 +28,7 @@ frontier-features = "frontier.features.registry:main"
 frontier-train = "frontier.predict.train:main"
 frontier-crc-report = "scripts.07_crc_report:main"
 frontier-eval = "frontier.eval.cli:main"
+frontier-p10 = "frontier.eval.p10:generate_reports"
 
 [tool.hatch.build.targets.wheel]
 packages = ["frontier"]
