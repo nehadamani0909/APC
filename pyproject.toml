@@ -23,6 +23,7 @@ dev = [
 
 [project.scripts]
 frontier-validate = "frontier.corpus.validate:main"
+frontier-features = "frontier.features.registry:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["frontier"]
