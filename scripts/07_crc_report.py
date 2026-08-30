@@ -152,35 +152,32 @@ def _svg(rows: list[dict[str, float]], path: Path) -> None:
     path.write_text("".join(parts), encoding="utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--corpus", type=Path, default=Path("data/corpus/v1/corpus.parquet")
-    )
-    parser.add_argument(
-        "--predictor", type=Path, default=Path("artifacts/predictor.json")
-    )
-    parser.add_argument("--instances-dir", type=Path, default=Path("data/raw"))
-    parser.add_argument("--report", type=Path, default=Path("reports/e5.md"))
-    parser.add_argument("--splits", type=int, default=20)
-    parser.add_argument("--price-row", default="gpt-4o-mini")
-    args = parser.parse_args()
+def run(
+    corpus_path: Path,
+    *,
+    predictor_path: Path = Path("artifacts/predictor.json"),
+    instances_dir: Path = Path("data/raw"),
+    report: Path = Path("reports/e5.md"),
+    splits: int = 20,
+    price_row: str = "gpt-4o-mini",
+) -> list[dict[str, float]]:
+    """Calibrate lambda and report E5a/E5b/E5c/E5d."""
 
-    corpus = read_corpus(args.corpus)
+    corpus = read_corpus(corpus_path)
     validate_corpus(corpus)
     curves = build_curves(corpus)
-    texts = load_prompt_text(args.instances_dir)
-    predictor = FrontierPredictor.from_artifact(args.predictor, model=args.price_row)
+    texts = load_prompt_text(instances_dir)
+    predictor = FrontierPredictor.from_artifact(predictor_path, model=price_row)
     quality, cost = predict_matrices(
         predictor, curves.prompt_ids, curves.families, texts
     )
-    rows = coverage_table(quality, cost, curves.quality, splits=args.splits)
+    rows = coverage_table(quality, cost, curves.quality, splits=splits)
 
     lines = [
         "# E5 - Risk-control validity",
         "",
-        f"Corpus: `{args.corpus}` | predictor: `{args.predictor}` | "
-        f"{args.splits} random calibration/test splits | {len(curves)} prompts",
+        f"Corpus: `{corpus_path}` | predictor: `{predictor_path}` | "
+        f"{splits} random calibration/test splits | {len(curves)} prompts",
         "",
         "## E5a / E5b - calibrated vs uncalibrated",
         "",
@@ -202,8 +199,10 @@ def main() -> None:
         "",
         "## E5c - tail control (Learn-then-Test)",
         "",
-        f"- λ̂ = {tail['lambda_hat']:.4f} for P(L > {tail['tau']}) ≤ {tail['delta']}",
-        f"- empirical tail rate: {tail['empirical_tail_rate']:.4f} over n={tail['n']}",
+        f"- λ̂ = {tail['lambda_hat']:.4f} for "
+        f"P(L > {tail['tau']}) ≤ {tail['delta']}",
+        f"- empirical tail rate: {tail['empirical_tail_rate']:.4f} "
+        f"over n={tail['n']}",
         "",
         "## E5d - cost of the guarantee",
         "",
@@ -213,9 +212,33 @@ def main() -> None:
         "guarantee holding. A fixed threshold that misses ε in either",
         "direction is the evidence that calibration is doing work.",
     ]
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    _svg(rows, args.report.with_suffix(".svg"))
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _svg(rows, report.with_suffix(".svg"))
+    return rows
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--corpus", type=Path, default=Path("data/corpus/v1/corpus.parquet")
+    )
+    parser.add_argument(
+        "--predictor", type=Path, default=Path("artifacts/predictor.json")
+    )
+    parser.add_argument("--instances-dir", type=Path, default=Path("data/raw"))
+    parser.add_argument("--report", type=Path, default=Path("reports/e5.md"))
+    parser.add_argument("--splits", type=int, default=20)
+    parser.add_argument("--price-row", default="gpt-4o-mini")
+    args = parser.parse_args()
+    run(
+        args.corpus,
+        predictor_path=args.predictor,
+        instances_dir=args.instances_dir,
+        report=args.report,
+        splits=args.splits,
+        price_row=args.price_row,
+    )
     print(f"wrote {args.report}")
 
 

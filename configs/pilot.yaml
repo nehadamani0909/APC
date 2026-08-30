@@ -1,6 +1,32 @@
-seed: 0
-temperature: 0.7
-budgets: [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0]
-model: local-default
-price_table_version: v1
-spend_cap_usd: 0.0
+# Gate 1 pilot (APC-06 §E1): stratified prompts x 7 budgets x k samples.
+# Local CPU model, so there is no provider bill; compute is recorded as
+# gpu_seconds in the ledger instead.
+run:
+  phase: gate1-pilot
+  seed: 0
+  temperature: 0.7          # k>1 sampling needs T>0 for graded rho
+  samples: 5                # k in APC-04 §3.1.1; the noise floor depends on it
+  budgets: [1.0, 0.8, 0.65, 0.5, 0.4, 0.3, 0.2]
+
+data:
+  families: [gsm8k]
+  instances_dir: data/raw
+  split: D_train
+  prompts_per_family: 20
+  max_context_words: null
+
+target:
+  provider: hf
+  model: Qwen/Qwen2.5-0.5B-Instruct
+  model_revision: main
+  price_row: local-default
+  device: cpu
+  max_new_tokens: 256
+
+compressor:
+  backend: truncate_tail
+  cache_dir: data/cache
+
+cost:
+  price_table_version: v1
+  spend_cap_usd: 0.0        # local run: no provider spend is possible

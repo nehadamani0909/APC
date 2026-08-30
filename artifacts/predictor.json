@@ -2,8 +2,8 @@
   "artifact": "frontier-predictor",
   "version": "2",
   "provenance": {
-    "created_utc": "2026-08-30T06:50:44.520210+00:00",
-    "code_version": "550f605",
+    "created_utc": "2026-08-30T09:19:23.868116+00:00",
+    "code_version": "dbb21ce",
     "corpus_path": "data\\corpus\\v1\\corpus.parquet",
     "corpus_rows": 7000,
     "price_table_version": "v1",

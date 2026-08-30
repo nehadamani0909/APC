@@ -1,6 +1,17 @@
-feature_tier: L0
-train_split: D_train
-calibration_split: D_cal_a
-crc_split: D_cal_b
-seed: 0
-artifact: artifacts/predictor.json
+# Predictor fitting. H1 is calibrated on D_cal_a and NOTHING else; D_cal_b
+# is reserved for the CRC threshold. Calibrating and thresholding on one
+# split silently voids the C1 guarantee.
+splits:
+  train: D_train
+  probability_calibration: D_cal_a
+  crc_threshold: D_cal_b
+  report: D_test
+
+fit:
+  feature_tier: L0
+  epsilon: 0.05
+  seed: 0
+  corpus: data/corpus/v1/corpus.parquet
+  instances_dir: data/raw
+  artifact: artifacts/predictor.json
+  report: reports/e2_e4.md

@@ -1,4 +1,17 @@
+# E3 evaluation. Baselines are tuned on the validation split; every number
+# reported comes from D_test.
 corpus: data/corpus/v1/corpus.parquet
-policies: all
+instances_dir: data/raw
+predictor: artifacts/predictor.json
+output: reports/t3.md
+
+tuning_split: D_cal_a
+report_split: D_test
+epsilon: 0.05
 bootstrap_resamples: 10000
+alpha: 0.05
+
+# A locally generated corpus is zero-priced, so costs are reported at an
+# explicit price row; E9 sweeps the c_out/c_in ratio over this.
+price_row: gpt-4o-mini
 price_table_version: v1
