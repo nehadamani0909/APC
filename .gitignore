@@ -13,3 +13,6 @@ data/raw/*
 data/splits/*
 !data/splits/.gitkeep
 *.parquet.tmp
+.coverage
+.coverage.*
+htmlcov/
