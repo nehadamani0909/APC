@@ -46,6 +46,9 @@ class DatasetSpec:
     # globally, so enabling it for one benchmark never silently enables
     # arbitrary code execution for the others.
     trust_remote_code: bool = False
+    # Some repos store raw JSON that `datasets` cannot auto-detect; they
+    # need the file named explicitly.
+    data_files: str | None = None
 
 
 def _document_id(text: str) -> str:
@@ -146,7 +149,7 @@ def normalize_humaneval(records: Sequence[Record]) -> list[Instance]:
                 query=f"Complete the Python function `{entry_point}`.",
                 gold=harness,
                 family="code",
-                source="openai_humaneval",
+                source="openai/openai_humaneval",
                 source_document_id=task_id or _document_id(prompt),
                 extra={"entry_point": entry_point},
             )
@@ -201,31 +204,62 @@ def normalize_meetingbank(records: Sequence[Record]) -> list[Instance]:
 
 
 def normalize_sharegpt(records: Sequence[Record]) -> list[Instance]:
-    """ShareGPT: prior turns compressed, final human turn is the query."""
+    """ShareGPT: prior turns compressed, final human turn is the query.
+
+    Scraped conversations are messy -- empty turns, truncated threads, and
+    inconsistent role ordering all occur -- so malformed records are skipped
+    rather than raising.  The strict empty-field guard is kept for the clean
+    benchmarks, where a missing field means the normaliser is wrong.
+    """
 
     instances: list[Instance] = []
+    skipped = 0
     for index, record in enumerate(records):
-        turns = list(record.get("conversations") or [])
+        turns = [
+            turn
+            for turn in (record.get("conversations") or [])
+            if isinstance(turn, Mapping) and str(turn.get("value", "")).strip()
+        ]
         if len(turns) < 3:
+            skipped += 1
             continue
-        history, last_query, last_reply = turns[:-2], turns[-2], turns[-1]
-        if not history:
+        # Anchor on the last assistant turn: the reply is the target and the
+        # turn before it is the query, whatever the role labels look like.
+        reply_at = next(
+            (
+                position
+                for position in range(len(turns) - 1, 0, -1)
+                if str(turns[position].get("from", "")).lower() in {"gpt", "assistant"}
+            ),
+            -1,
+        )
+        if reply_at < 2:
+            skipped += 1
             continue
+        history = turns[: reply_at - 1]
         context = "\n".join(
             f"{str(turn.get('from', '?')).upper()}: {turn.get('value', '')}"
             for turn in history
         )
+        query = str(turns[reply_at - 1].get("value", "")).strip()
+        gold = str(turns[reply_at].get("value", "")).strip()
+        if not context.strip() or not query or not gold:
+            skipped += 1
+            continue
         instances.append(
             _instance(
                 prompt_id=f"sharegpt-{_text(record, 'id') or index}",
                 context=context,
-                query=str(last_query.get("value", "")),
-                gold=str(last_reply.get("value", "")),
+                query=query,
+                gold=gold,
                 family="conv",
                 source="anon8231489123/ShareGPT_Vicuna_unfiltered",
                 source_document_id=_document_id(context),
+                extra={"turns": len(turns)},
             )
         )
+    if skipped:
+        print(f"sharegpt: skipped {skipped} malformed conversations")
     return instances
 
 
@@ -282,7 +316,13 @@ def _build_specs() -> dict[str, DatasetSpec]:
             "test",
         ),
         "humaneval": DatasetSpec(
-            "humaneval", "code", "openai_humaneval", normalize_humaneval, None, "test"
+            "humaneval",
+            "code",
+            # Namespaced: modern huggingface_hub rejects a bare repo id.
+            "openai/openai_humaneval",
+            normalize_humaneval,
+            None,
+            "test",
         ),
         "mbpp": DatasetSpec(
             "mbpp",
@@ -292,6 +332,9 @@ def _build_specs() -> dict[str, DatasetSpec]:
             "full",
             "test",
         ),
+        # NOTE: ShareGPT is scraped assistant output with unclear licensing.
+        # Treat it as an exploratory family, and check redistribution terms
+        # before shipping anything derived from it.
         "sharegpt": DatasetSpec(
             "sharegpt",
             "conv",
@@ -299,6 +342,7 @@ def _build_specs() -> dict[str, DatasetSpec]:
             normalize_sharegpt,
             None,
             "train",
+            data_files="ShareGPT_V3_unfiltered_cleaned_split.json",
         ),
     }
     for group, (family, configs) in LONGBENCH_GROUPS.items():
@@ -336,6 +380,8 @@ def load_huggingface(
     except ImportError as exc:
         raise RuntimeError("install the 'real' extra to use Hugging Face ETL") from exc
     options: dict[str, Any] = {}
+    if spec.data_files is not None:
+        options["data_files"] = spec.data_files
     if spec.trust_remote_code:
         # Only forwarded when the spec asks for it: newer `datasets` releases
         # reject the keyword outright, and passing it by default would make

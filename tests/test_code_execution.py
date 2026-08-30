@@ -52,9 +52,33 @@ def test_dangerous_imports_are_refused() -> None:
 
 
 def test_sys_exit_cannot_fake_a_pass() -> None:
-    # sys.exit(0) would give a zero return code without running the tests.
+    # sys.exit(0) exits cleanly WITHOUT running the assertions, so the return
+    # code alone cannot tell a pass from a skip. The success sentinel closes
+    # that hole, which is what lets sys stay on the allow-list.
     candidate = "import sys\ndef square_root(n):\n    sys.exit(0)\n"
     assert sandboxed_code_check(candidate, HARNESS) is False
+
+
+def test_sys_is_usable_for_computation() -> None:
+    # Real MBPP solutions use sys.maxsize; banning sys outright cost two
+    # correct solutions in the 500-problem test split.
+    candidate = (
+        "import sys\n"
+        "def square_root(n):\n"
+        "    return min(sys.maxsize, n // 2)\n"
+    )
+    assert pass_at_1(candidate, HARNESS) == 1.0
+
+
+def test_hashlib_is_available() -> None:
+    # HumanEval/162 (string_to_md5) needs it, and it is pure computation.
+    candidate = (
+        "import hashlib\n"
+        "def square_root(n):\n"
+        "    hashlib.md5(b'x').hexdigest()\n"
+        "    return n // 2\n"
+    )
+    assert pass_at_1(candidate, HARNESS) == 1.0
 
 
 def test_dynamic_execution_primitives_are_refused() -> None:

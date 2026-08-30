@@ -97,13 +97,20 @@ def pass_at_1(pred: str, gold: str) -> float:
 ALLOWED_IMPORTS = frozenset(
     {
         "abc", "array", "bisect", "cmath", "collections", "copy", "dataclasses",
-        "datetime", "decimal", "enum", "fractions", "functools", "heapq",
-        "itertools", "json", "math", "numbers", "operator", "queue", "random",
-        "re", "statistics", "string", "textwrap", "types", "typing",
-        "unicodedata",
+        "datetime", "decimal", "enum", "fractions", "functools", "hashlib",
+        "heapq", "itertools", "json", "math", "numbers", "operator", "queue",
+        "random", "re", "statistics", "string", "sys", "textwrap", "types",
+        "typing", "unicodedata",
     }
 )
 _BLOCKED_CALLS = frozenset({"__import__", "compile", "eval", "exec", "open"})
+
+#: Printed after the harness returns. A candidate that calls ``sys.exit(0)``
+#: early exits with a zero return code without ever running the assertions,
+#: so the return code alone cannot distinguish a pass from a skip. Requiring
+#: this sentinel in stdout closes that hole -- which is what lets ``sys`` stay
+#: on the allow-list, since real solutions use ``sys.maxsize``.
+SUCCESS_SENTINEL = "__FRONTIER_TESTS_PASSED__"
 
 
 def _imported_roots(tree: ast.AST) -> set[str]:
@@ -185,7 +192,7 @@ def sandboxed_code_check(
     if not all(_is_statically_safe(tree) for tree in (candidate_tree, test_tree)):
         return False
 
-    script = f"{candidate}\n\n{tests}\n"
+    script = f"{candidate}\n\n{tests}\n\nprint({SUCCESS_SENTINEL!r})\n"
     with tempfile.TemporaryDirectory(prefix="frontier-code-") as directory:
         environment = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""}
         preexec = _resource_limits(memory_bytes, max(1, int(timeout_s)))
@@ -203,4 +210,5 @@ def sandboxed_code_check(
             )
         except (subprocess.SubprocessError, OSError, ValueError):
             return False
-    return bool(completed.returncode == 0)
+    # Both conditions: a clean exit AND proof the assertions actually ran.
+    return bool(completed.returncode == 0 and SUCCESS_SENTINEL in completed.stdout)

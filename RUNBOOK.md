@@ -17,7 +17,7 @@ selected.
 Verify:
 
 ```bash
-uv run --extra dev pytest        # 96 passed, 2 skipped
+uv run --extra dev pytest        # 119 passed, 5 skipped
 uv run --extra dev ruff check .
 uv run --extra dev mypy frontier scripts tests
 ```
@@ -70,6 +70,8 @@ uv run python scripts/03_fetch_data.py gsm8k --output-dir data/raw --n 200
 uv run python scripts/03_fetch_data.py hotpotqa --output-dir data/raw --n 200
 uv run python scripts/03_fetch_data.py meetingbank --output-dir data/raw --n 200
 uv run python scripts/03_fetch_data.py sharegpt --output-dir data/raw --n 200
+uv run python scripts/03_fetch_data.py humaneval --output-dir data/raw --n 164
+uv run python scripts/03_fetch_data.py mbpp --output-dir data/raw --n 200
 ```
 
 Writes normalised JSONL to `data/raw/<name>.jsonl` (all splits, each row
@@ -91,14 +93,35 @@ Datasets and weights are gitignored and must never be committed.
 
 ### Verified against live data
 
-| Family | Instances | Context length (words) | Splits |
-|---|---|---|---|
-| `gsm8k` | 200 | 737 (8-shot block, constant) | 120 / 20 / 20 / 40 |
-| `hotpotqa` | 120 | min 1,258 · median 10,260 · max 12,680 | 72 / 12 / 12 / 24 |
+All six families fetched and checked: exact 60/10/10/20 ratios, no prompt id
+or source document crossing a split, no empty fields, no empty splits.
 
-Both check out: exact 60/10/10/20 ratios, no prompt id or source document
-crossing a split, no evaluated question appearing inside its own context, and
-GSM8K golds parsing to numerics.
+| Family | n | Context words (min / median / max) | Notes |
+|---|---:|---|---|
+| `gsm8k` | 200 | 737 / 737 / 737 | 8-shot CoT block, constant by construction |
+| `hotpotqa` | 120 | 1,258 / 10,260 / 12,680 | the long-context workhorse |
+| `meetingbank` | 64 | 122 / 999 / 28,247 | in-domain for the LLMLingua-2 checkpoint |
+| `humaneval` | 64 | 17 / 39 / 131 | short; see below |
+| `mbpp` | 64 | 7 / 14 / 27 | very short; see below |
+| `sharegpt` | 64 | 32 / 853 / 1,526 | ~22% of conversations skipped as malformed |
+
+**The code families are short-prompt cases.** MBPP's compressible context is
+the natural-language description alone -- a median of 14 words, so `b=0.2`
+leaves about three. HumanEval is not much longer. Any "code cliff" measured
+there is the APC-06 §E11.4 *short prompt* regime ("little to remove; overhead
+dominates") rather than a compression-tolerance finding, and should be
+reported as such. LongBench's `lcc` and `repobench-p` are the long-context
+code subsets if a genuine code-compression result is wanted.
+
+**Dataset quirks found by running the fetch:**
+
+- LongBench ships a loading script, so its specs set `trust_remote_code`.
+- HumanEval needs the namespaced id `openai/openai_humaneval`; modern
+  `huggingface_hub` rejects a bare repo id.
+- ShareGPT stores raw JSON that `datasets` cannot auto-detect, so the spec
+  names `data_files` explicitly. It is scraped assistant output with unclear
+  licensing -- check redistribution terms before shipping anything derived
+  from it.
 
 ## 6. Gate 1 — the decision that determines the paper
 
