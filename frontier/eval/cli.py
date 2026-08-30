@@ -1,37 +1,29 @@
-"""Command-line entry point for the P8 policy smoke evaluator."""
+"""Command-line entry point for the E3 policy evaluation."""
 
 from __future__ import annotations
 
 import argparse
+from importlib import import_module
 from pathlib import Path
+from typing import Any
 
-from frontier.corpus.validate import read_corpus, validate_corpus
-from frontier.eval.policies import render_t3, smoke_table, table_for_rows
+
+def _module() -> Any:
+    return import_module("scripts.08_eval")
 
 
 def run(corpus_path: Path, output: Path = Path("reports/t3.md")) -> None:
-    if corpus_path.exists():
-        corpus = read_corpus(corpus_path)
-        validate_corpus(corpus)
-        rows = [
-            (f"context for {prompt_id} family {family}", task, family)
-            for prompt_id, task, family in corpus[["prompt_id", "task", "family"]]
-            .drop_duplicates()
-            .itertuples(index=False, name=None)
-        ]
-        summaries = table_for_rows(rows)
-    else:
-        summaries = smoke_table()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_t3(summaries), encoding="utf-8")
+    """Evaluate every policy on *corpus_path* and write table T3."""
+
+    _module().run(corpus_path, output=output)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--policies", choices=("all",), default="all")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--corpus", type=Path, default=Path("data/corpus/v1/corpus.parquet")
     )
+    parser.add_argument("--output", type=Path, default=Path("reports/t3.md"))
     args = parser.parse_args()
-    run(args.corpus)
-    print("wrote reports/t3.md")
+    run(args.corpus, args.output)
+    print(f"wrote {args.output}")

@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import pandas as pd
 
 from frontier.corpus.labels import (
     CurveLabels,
@@ -44,10 +43,9 @@ from frontier.predict.heads import (
     RateAdherenceHead,
 )
 from frontier.predict.scaling import FeatureScaler
-from frontier.predict.train import assert_disjoint, split_prompt_ids
+from frontier.predict.train import assert_disjoint, resolve_splits
 
 Array = np.ndarray[Any, np.dtype[np.float64]]
-SPLITS = ("D_train", "D_cal_a", "D_cal_b", "D_test")
 DEFAULT_EPSILON = 0.05
 
 
@@ -61,26 +59,6 @@ def _git_revision() -> str:
         ).stdout.strip()
     except (subprocess.SubprocessError, OSError):
         return "unknown"
-
-
-def resolve_splits(corpus: pd.DataFrame, *, seed: int) -> dict[str, set[str]]:
-    """Use the corpus's own split column when it carries real assignments."""
-
-    labelled = set(corpus["split"].astype(str).unique()) & set(SPLITS)
-    if labelled:
-        return {
-            name: set(
-                corpus.loc[corpus["split"].astype(str) == name, "prompt_id"]
-                .astype(str)
-                .unique()
-            )
-            for name in SPLITS
-        }
-    # A corpus built before split assignment (the fixture) has no usable
-    # column; derive the partition deterministically by prompt id instead.
-    return split_prompt_ids(
-        sorted(corpus["prompt_id"].astype(str).unique()), seed=seed
-    )
 
 
 def _features_for(

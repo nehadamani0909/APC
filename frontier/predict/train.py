@@ -6,6 +6,12 @@ import argparse
 import random
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle only matters for typing
+    import pandas as pd
+
+SPLITS = ("D_train", "D_cal_a", "D_cal_b", "D_test")
 
 
 def split_prompt_ids(
@@ -23,6 +29,30 @@ def split_prompt_ids(
         "D_cal_b": set(unique[cal_a_end:cal_b_end]),
         "D_test": set(unique[cal_b_end:]),
     }
+
+
+def resolve_splits(corpus: pd.DataFrame, *, seed: int = 0) -> dict[str, set[str]]:
+    """Use the corpus's own split column when it carries real assignments.
+
+    A corpus built before split assignment has no usable column, so the
+    partition is derived deterministically by prompt id instead. Both paths
+    keep D_cal_a (H1 calibration) disjoint from D_cal_b (the CRC threshold),
+    which is the condition the C1 guarantee rests on.
+    """
+
+    labelled = set(corpus["split"].astype(str).unique()) & set(SPLITS)
+    if labelled:
+        return {
+            name: set(
+                corpus.loc[corpus["split"].astype(str) == name, "prompt_id"]
+                .astype(str)
+                .unique()
+            )
+            for name in SPLITS
+        }
+    return split_prompt_ids(
+        sorted(corpus["prompt_id"].astype(str).unique()), seed=seed
+    )
 
 
 def assert_disjoint(splits: dict[str, set[str]]) -> None:
