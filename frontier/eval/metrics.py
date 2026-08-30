@@ -12,11 +12,17 @@ Array = np.ndarray[Any, np.dtype[Any]]
 
 
 def cpgr(ours: float, fixed: float, oracle: float) -> float:
-    """Compression performance gap recovered, clipped to a stable range."""
+    """Compression performance gap recovered against the B2b-to-oracle gap.
+
+    Deliberately not clipped at zero. Gate 3 is defined as beating B2b, so a
+    negative CPGR -- the policy doing WORSE than the per-family tuned fixed
+    budget -- is the single most important value this can take, and clipping
+    it to 0.0 would report a gate failure as a neutral result.
+    """
     denominator = oracle - fixed
     if denominator == 0.0:
         return 0.0
-    return float(np.clip((ours - fixed) / denominator, 0.0, 1.0))
+    return float((ours - fixed) / denominator)
 
 
 def cpt(cost: Array, quality: Array, target: float) -> float:

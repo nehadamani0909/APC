@@ -1,3 +1,5 @@
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -6,6 +8,7 @@ from frontier.compress.base import WhitespaceTokenizer
 from frontier.compress.baselines import RandomDropCompressor, TruncateTailCompressor
 from frontier.compress.cpc import CPCCompressor
 from frontier.compress.llmlingua2 import LLMLingua2Compressor
+from frontier.compress.llmlingua_base import default_device
 from frontier.compress.longllmlingua import LongLLMLinguaCompressor
 
 
@@ -80,3 +83,50 @@ def test_random_drop_is_reproducible() -> None:
 def test_cpc_is_explicitly_unavailable() -> None:
     with pytest.raises(RuntimeError, match="no usable released"):
         CPCCompressor(WhitespaceTokenizer()).compress("text", None, 0.5)
+
+
+class _FakePromptCompressor:
+    """Counts how many times the LLMLingua engine gets constructed."""
+
+    constructions = 0
+
+    def __init__(self, **kwargs: object) -> None:
+        type(self).constructions += 1
+        self.kwargs = kwargs
+
+    def compress_prompt(
+        self, context: list[str], question: str = "", rate: float = 1.0, **_: object
+    ) -> dict[str, str]:
+        words = context[0].split()
+        return {"compressed_prompt": " ".join(words[: round(len(words) * rate)])}
+
+
+def test_llmlingua_engine_is_loaded_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = types.ModuleType("llmlingua")
+    module.PromptCompressor = _FakePromptCompressor  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "llmlingua", module)
+    _FakePromptCompressor.constructions = 0
+
+    backend = LLMLingua2Compressor(WhitespaceTokenizer(), device_map="cpu")
+    for rate in (0.2, 0.4, 0.65, 1.0):
+        assert backend.compress("one two three four five", "q", rate).realised_rate > 0
+    # Constructing the engine per call would reload the model on every one of
+    # the grid's cells.
+    assert _FakePromptCompressor.constructions == 1
+
+
+def test_llmlingua2_defaults_to_a_token_classification_checkpoint() -> None:
+    backend = LLMLingua2Compressor(WhitespaceTokenizer(), device_map="cpu")
+    # Pairing use_llmlingua2=True with a 7B causal LM was incoherent.
+    assert "llmlingua-2" in backend.default_model
+    assert backend.use_llmlingua2 is True
+    assert backend.model_version.endswith("@main")
+    assert LongLLMLinguaCompressor(
+        WhitespaceTokenizer(), device_map="cpu"
+    ).use_llmlingua2 is False
+
+
+def test_device_falls_back_to_cpu_without_cuda() -> None:
+    assert default_device() in {"cpu", "cuda"}
+    backend = LLMLingua2Compressor(WhitespaceTokenizer())
+    assert backend.device_map in {"cpu", "cuda"}

@@ -89,47 +89,106 @@ def pass_at_1(pred: str, gold: str) -> float:
     return float(sandboxed_code_check(pred, gold))
 
 
-def sandboxed_code_check(
-    candidate: str, tests: str, *, timeout_s: float = 2.0
-) -> bool:
-    """Run candidate code and tests in an isolated temporary working directory.
+# Pure-computation standard library modules that correct HumanEval and MBPP
+# solutions genuinely need.  An allow-list rather than a deny-list, so an
+# unrecognised module is refused rather than admitted by omission.  ``sys`` is
+# excluded deliberately: ``sys.exit(0)`` would make a failing candidate look
+# like a pass.
+ALLOWED_IMPORTS = frozenset(
+    {
+        "abc", "array", "bisect", "cmath", "collections", "copy", "dataclasses",
+        "datetime", "decimal", "enum", "fractions", "functools", "heapq",
+        "itertools", "json", "math", "numbers", "operator", "queue", "random",
+        "re", "statistics", "string", "textwrap", "types", "typing",
+        "unicodedata",
+    }
+)
+_BLOCKED_CALLS = frozenset({"__import__", "compile", "eval", "exec", "open"})
 
-    Imports and filesystem primitives are rejected before execution.  The
-    subprocess has a timeout and a temporary cwd; this is a conservative unit
-    test sandbox, not a general-purpose hostile-code execution boundary.
+
+def _imported_roots(tree: ast.AST) -> set[str]:
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            # A relative import has no module to resolve against here.
+            roots.add((node.module or "").split(".")[0])
+    return roots
+
+
+def _is_statically_safe(tree: ast.AST) -> bool:
+    if not _imported_roots(tree) <= ALLOWED_IMPORTS:
+        return False
+    return not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _BLOCKED_CALLS
+        for node in ast.walk(tree)
+    )
+
+
+def _resource_limits(memory_bytes: int, cpu_seconds: int) -> Callable[[], None] | None:
+    """Return a POSIX ``preexec_fn`` applying rlimits, or None on Windows."""
+
+    try:
+        import resource
+    except ImportError:  # Windows has no resource module
+        return None
+
+    # Probed rather than referenced directly: the individual limits are not
+    # all defined on every POSIX platform, and none of them exist on Windows.
+    setrlimit = getattr(resource, "setrlimit", None)
+    if setrlimit is None:
+        return None
+
+    def apply() -> None:
+        limits = (
+            ("RLIMIT_AS", memory_bytes),
+            ("RLIMIT_CPU", cpu_seconds),
+            ("RLIMIT_NPROC", 0),
+        )
+        for name, value in limits:
+            limit = getattr(resource, name, None)
+            if limit is not None:
+                setrlimit(limit, (value, value))
+
+    return apply
+
+
+def sandboxed_code_check(
+    candidate: str,
+    tests: str,
+    *,
+    timeout_s: float = 5.0,
+    memory_bytes: int = 512 * 1024 * 1024,
+) -> bool:
+    """Execute a candidate against its test harness under isolation.
+
+    Layers, in order: a static screen (allow-listed imports, no ``eval`` /
+    ``exec`` / ``open``), then a subprocess in isolated mode with a scrubbed
+    environment, a temporary working directory, a wall-clock timeout, and --
+    on POSIX -- address-space, CPU, and subprocess rlimits.
+
+    This is a unit-test sandbox for model-generated code, not a boundary
+    against a determined adversary: on Windows no rlimits are available, and
+    nothing here blocks network syscalls directly (the import allow-list is
+    what keeps ``socket``/``urllib`` out of reach).  Run untrusted grids in a
+    container if that residual risk matters.
     """
 
     try:
-        tree = ast.parse(candidate)
-        ast.parse(tests)
-    except SyntaxError:
+        candidate_tree = ast.parse(candidate)
+        test_tree = ast.parse(tests)
+    except (SyntaxError, ValueError):
         return False
-    forbidden = (
-        ast.Import,
-        ast.ImportFrom,
-        ast.With,
-        ast.AsyncWith,
-        ast.Delete,
-    )
-    test_tree = ast.parse(tests)
-    if any(
-        isinstance(node, forbidden)
-        for candidate_tree in (tree, test_tree)
-        for node in ast.walk(candidate_tree)
-    ):
+    if not all(_is_statically_safe(tree) for tree in (candidate_tree, test_tree)):
         return False
-    blocked_calls = {"__import__", "compile", "eval", "exec", "open"}
-    if any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in blocked_calls
-        for candidate_tree in (tree, test_tree)
-        for node in ast.walk(candidate_tree)
-    ):
-        return False
+
     script = f"{candidate}\n\n{tests}\n"
     with tempfile.TemporaryDirectory(prefix="frontier-code-") as directory:
         environment = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""}
+        preexec = _resource_limits(memory_bytes, max(1, int(timeout_s)))
         try:
             completed = subprocess.run(
                 [sys.executable, "-I", "-c", script],
@@ -139,7 +198,9 @@ def sandboxed_code_check(
                 timeout=timeout_s,
                 check=False,
                 text=True,
+                # None on Windows, where preexec_fn is unsupported anyway.
+                preexec_fn=preexec,
             )
-        except (subprocess.SubprocessError, OSError):
+        except (subprocess.SubprocessError, OSError, ValueError):
             return False
-    return completed.returncode == 0
+    return bool(completed.returncode == 0)

@@ -1,50 +1,19 @@
-"""Black-box LLMLingua-2 adapter."""
+"""Black-box LLMLingua-2 adapter (the default backend, APC-04 §5.1)."""
 
 from __future__ import annotations
 
-import importlib.metadata
-from collections.abc import Callable
-from pathlib import Path
-
-from frontier.compress.base import TargetTokenizer, TextCompressor
+from frontier.compress.llmlingua_base import LLMLinguaAdapter
 
 
-class LLMLingua2Compressor(TextCompressor):
+class LLMLingua2Compressor(LLMLinguaAdapter):
     name = "llmlingua2"
-    backend_version = "injected"
-
-    def __init__(
-        self,
-        tokenizer: TargetTokenizer,
-        compressor: Callable[..., str] | None = None,
-        *,
-        cache_dir: str | Path | None = None,
-        model_name: str = "NousResearch/Llama-2-7b-hf",
-        device_map: str = "cuda",
-    ) -> None:
-        super().__init__(tokenizer, cache_dir=cache_dir)
-        self.compressor = compressor
-        self.model_name = model_name
-        self.device_map = device_map
-        try:
-            version = importlib.metadata.version("llmlingua")
-        except importlib.metadata.PackageNotFoundError:
-            version = "uninstalled"
-        self.backend_version = f"llmlingua-{version}"
-
-    def _compress_text(
-        self, ctx: str, query: str | None, rate: float
-    ) -> tuple[str, float]:
-        if self.compressor is None:
-            try:
-                from llmlingua import PromptCompressor
-            except ImportError as exc:
-                raise RuntimeError("install the 'real' extra for LLMLingua-2") from exc
-            engine = PromptCompressor(
-                model_name=self.model_name,
-                device_map=self.device_map,
-                use_llmlingua2=True,
-            )
-            result = engine.compress_prompt([ctx], question=query or "", rate=rate)
-            return str(result["compressed_prompt"]), 0.0
-        return self.compressor(ctx, query, rate), 0.0
+    use_llmlingua2 = True
+    # LLMLingua-2 is a token-classification model (XLM-RoBERTa), not a causal
+    # LM. The previous default paired a 7B Llama checkpoint with
+    # use_llmlingua2=True, which is an incoherent combination and needs 13GB
+    # of weights besides.
+    #
+    # NOTE: this checkpoint is trained on MeetingBank, so MeetingBank results
+    # are in-domain for the compressor and belong in the paper as a control
+    # rather than a headline (APC-05 §4.3).
+    default_model = "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"
