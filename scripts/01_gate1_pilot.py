@@ -49,7 +49,22 @@ def load_pilot_instances(
     pairs: list[tuple[Task, Instance]] = []
     for family in families:
         task = _task_by_name(family, instances_dir)
-        instances = task.load(split)
+        if split == "all":
+            # Draw across all four splits in the 60/10/10/20 proportions, so
+            # the resulting corpus can train, calibrate, AND report. Drawing
+            # only from D_train yields a corpus whose D_test is empty, and the
+            # evaluation then has nothing to report on.
+            instances = []
+            for name, share in (
+                ("D_train", 0.6),
+                ("D_cal_a", 0.1),
+                ("D_cal_b", 0.1),
+                ("D_test", 0.2),
+            ):
+                take = max(1, round(per_family * share))
+                instances.extend(task.load(name)[:take])
+        else:
+            instances = task.load(split)
         if not instances:
             raise ValueError(
                 f"no instances for {family!r} split {split!r} under {instances_dir}. "
@@ -140,7 +155,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--families", default="gsm8k", help="comma-separated")
     parser.add_argument("--instances-dir", type=Path, default=Path("data/raw"))
-    parser.add_argument("--split", default="D_train")
+    parser.add_argument(
+        "--split",
+        default="all",
+        help='"all" draws across the four splits in 60/10/10/20 proportions '
+        "so the corpus can train, calibrate, and report",
+    )
     parser.add_argument("--prompts-per-family", type=int, default=20)
     parser.add_argument("--samples", type=int, default=5, help="k in APC-04 §3.1.1")
     parser.add_argument("--temperature", type=float, default=0.7)

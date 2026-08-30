@@ -24,9 +24,10 @@ it cannot be reconstructed afterwards.
   against the invoice.
 - **Writes are lock-guarded.** On Windows concurrent appends are not atomic,
   so parallel grid workers would otherwise interleave.
-- **A local model is zero-priced.** Its compute is recorded as `gpu_seconds`,
-  and analyses cost such a corpus at an explicit price row, which is stated
-  in the report.
+- **A local model is zero-priced.** Its compute is recorded as wall time in
+  `latency_ms` (generation) and `compress_ms` (compression); `gpu_seconds` is
+  GPU time specifically, and is legitimately 0 for a CPU run. Analyses cost
+  such a corpus at an explicit price row, which is stated in the report.
 
 ## Spend control
 

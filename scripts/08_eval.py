@@ -123,7 +123,12 @@ def run(
     validation, _ = _subset(curves, splits["D_cal_a"])
     test, test_index = _subset(curves, splits["D_test"])
     if len(test) == 0:
-        raise ValueError("D_test is empty; nothing to report")
+        raise ValueError(
+            "D_test is empty; nothing to report. Split sizes: "
+            + ", ".join(f"{name}={len(ids)}" for name, ids in splits.items())
+            + ". A pilot run drawn from a single split produces a corpus that "
+            "cannot be reported on; re-run the pilot with --split all."
+        )
     tuning = validation if len(validation) else test
 
     price = get_price(price_row, PRICE_TABLE_VERSION)
