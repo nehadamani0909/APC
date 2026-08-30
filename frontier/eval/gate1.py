@@ -84,7 +84,16 @@ def _labels(frame: pd.DataFrame, epsilon: float) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
-def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float:
+def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float | None:
+    """Split-half estimate of the sampling-noise variance in ``b*``.
+
+    Returns ``None`` when it cannot be estimated -- fewer than two sample
+    indices, or budgets missing from a half.  Returning 0.0 there would be
+    read as "there is no noise", and the gate would then compare the observed
+    variance against a threshold of zero and look decisive when nothing was
+    measured.  The gate is the project's go/no-go; it must not silently
+    degrade.
+    """
     values: list[float] = []
     rng = random.Random(0)
     for prompt_id, prompt_frame in frame.groupby("prompt_id"):
@@ -108,26 +117,92 @@ def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float:
                 )
             if len(halves) == 2:
                 values.append((halves[0] - halves[1]) ** 2 / 2.0)
-    return float(pd.Series(values).mean()) if values else 0.0
+    return float(pd.Series(values).mean()) if values else None
+
+
+def check_validity(frame: pd.DataFrame) -> list[str]:
+    """Preconditions the gate needs before its verdict means anything.
+
+    Gate 1 asks whether compression tolerance varies across instances. Two
+    situations make that unanswerable no matter how much data is collected,
+    and both look like an ordinary FAIL if they are not checked:
+
+    1. A prompt the model already fails uncompressed has no compression
+       tolerance to measure. ``rho(x,1) = 0`` makes every budget satisfy
+       ``rho(b) >= 0 - epsilon``, so ``b*`` collapses to the smallest budget
+       for a reason that has nothing to do with compression.
+    2. If compression appears to *improve* aggregate quality, the signal is
+       below the noise floor -- removing context cannot systematically help.
+
+    APC-05 §8 pre-commits the project to abandoning the method paper on a
+    FAIL, so reporting one from an uninterpretable measurement is the most
+    expensive mistake this module can make.
+    """
+
+    problems: list[str] = []
+    quality = frame.assign(b=frame["requested_b"].round(4)).pivot_table(
+        index="prompt_id", columns="b", values="quality", aggfunc="mean"
+    )
+    if 1.0 not in quality.columns:
+        return ["no uncompressed (b=1.0) rows: rho(x,1) is undefined"]
+    baseline = quality[1.0]
+    unsolvable = int((baseline <= 0.0).sum())
+    if unsolvable:
+        share = unsolvable / len(baseline)
+        problems.append(
+            f"{unsolvable}/{len(baseline)} prompts ({share:.0%}) have "
+            "rho(x,1) = 0: the target model never solves them uncompressed, "
+            "so their b* is degenerate (every budget is trivially 'safe')"
+        )
+    solvable = int((baseline > 0.0).sum())
+    if solvable < 10:
+        problems.append(
+            f"only {solvable} prompts are solvable uncompressed; too few to "
+            "estimate within-family Var[b*]"
+        )
+    means = quality.mean()
+    best_budget = float(means.idxmax())
+    if best_budget < 1.0 and means.max() - means[1.0] > 0.02:
+        problems.append(
+            f"mean quality peaks at b={best_budget:g} ({means.max():.3f}), "
+            f"above uncompressed ({means[1.0]:.3f}): compression cannot "
+            "systematically improve accuracy, so the curves are noise-dominated"
+        )
+    return problems
 
 
 def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None:
     frame = pd.read_json(ledger_path, lines=True)
+    validity = check_validity(frame)
     labels_by_epsilon = {epsilon: _labels(frame, epsilon) for epsilon in EPSILONS}
     report = [
         "# Gate 1 report",
         "",
         f"Rows: {len(frame)}",
         "",
-        "> Provenance: this run uses the deterministic offline pilot target and "
-        "> fixture-style prompts to validate the P3 harness path. Its PASS/FAIL "
-        "> result is not evidence about a real target model; rerun with the pinned "
-        "> local model before making the project go/no-go decision.",
+        "> **Provenance.** Gate 1 is the project's go/no-go (APC-05 §2).",
+        "> A PASS or FAIL here is only evidence about the target model,",
+        "> compressor, and prompts that actually produced this ledger.",
+        "> Check the corpus provenance before treating it as the decision.",
         "",
     ]
+    if validity:
+        report += [
+            "## ⚠ Validity preconditions NOT met",
+            "",
+            "The gate's verdict is **not interpretable** on this data:",
+            "",
+            *[f"- {problem}" for problem in validity],
+            "",
+            "Everything below is reported for diagnosis only. Do not act on",
+            "it, and in particular do not treat it as the APC-05 §8 FAIL that",
+            "pre-commits the project to the corpus/negative-result paper.",
+            "",
+        ]
     report.append("## Gate test")
     report.append("")
     passed_all = True
+    any_inconclusive = False
     for epsilon, labels in labels_by_epsilon.items():
         report.append(f"### ε = {epsilon:.2f}")
         report.append("")
@@ -135,6 +210,18 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
             values = family_labels["b_star"].tolist()
             variance, ci_low, ci_high = _bootstrap_variance(values)
             noise = _noise_floor(frame[frame["family"] == family], epsilon)
+            if noise is None:
+                # Not a FAIL: a FAIL is a scientific claim that the
+                # heterogeneity is within noise. This is "the test did not
+                # run", which must never be reported as a verdict.
+                any_inconclusive = True
+                report.append(
+                    f"- {family}: Var[b*]={variance:.6f}; bootstrap CI="
+                    f"[{ci_low:.6f}, {ci_high:.6f}]; σ²_noise=**not estimable** "
+                    f"(needs k>=2 samples per prompt at every budget); "
+                    f"**INCONCLUSIVE**"
+                )
+                continue
             passed = ci_low > 2.0 * noise
             passed_all = passed_all and passed
             report.append(
@@ -151,11 +238,39 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
             f"(95% bootstrap CI [{gap_low:.4f}, {gap_high:.4f}])"
         )
         report.append("")
-    report.append(f"## Overall Gate 1 result: **{'PASS' if passed_all else 'FAIL'}**")
+    if validity:
+        verdict = "INCONCLUSIVE (validity preconditions not met)"
+        note = (
+            "The target model, not the compression, is the limiting factor "
+            "here. Re-run with a model that solves the task uncompressed "
+            "before reading any verdict from this gate."
+        )
+    elif any_inconclusive:
+        verdict = "INCONCLUSIVE"
+        note = (
+            "At least one family could not have its noise floor estimated, so "
+            "the gate did not run there. This is not a FAIL: a FAIL asserts "
+            "that heterogeneity is within sampling noise, which was not "
+            "measured. Re-run with k>=2 samples per prompt at every budget."
+        )
+    elif passed_all:
+        verdict = "PASS"
+        note = "Within-family Var[b*] exceeds twice the sampling-noise floor."
+    else:
+        verdict = "FAIL"
+        note = (
+            "Within-family Var[b*] does not exceed the noise floor. APC-05 §8 "
+            "pre-commits to the C5 corpus/negative-result paper on this "
+            "outcome; do not proceed on a borderline result."
+        )
+    report.append(f"## Overall Gate 1 result: **{verdict}**")
+    report.append("")
+    report.append(note)
     report.append("")
     report.append("## E1c rate adherence")
     report.append("")
-    for key, group in frame.groupby(["family", "backend", "requested_b"]):
+    grouped = frame.assign(requested_b=frame["requested_b"].round(4))
+    for key, group in grouped.groupby(["family", "backend", "requested_b"]):
         mean, low, high = _mean_ci(group["realised_r"].tolist())
         report.append(
             f"- {key}: mean realised rate={mean:.4f} "
@@ -170,6 +285,7 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
         lambda row: float(row["T_out"]) / float(baseline[str(row["prompt_id"])] or 1.0),
         axis=1,
     )
+    expanded["requested_b"] = expanded["requested_b"].round(4)
     for key, group in expanded.groupby(["family", "requested_b"]):
         mean, low, high = _mean_ci(group["expansion"].tolist())
         report.append(

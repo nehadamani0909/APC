@@ -1,0 +1,32 @@
+# The same Gate 1 pilot against an API model.
+# DECISION: APC-04 §3.1.1 specifies k=5 locally and k=1 at T=0 for API
+# models because API cost was the constraint. At pilot scale the cost is a
+# few dollars, and the gate depends on k=5 for its noise floor, so k stays
+# at 5 here and the deviation is recorded.
+run:
+  phase: gate1-pilot-api
+  seed: 0
+  temperature: 0.7
+  samples: 5
+  budgets: [1.0, 0.8, 0.65, 0.5, 0.4, 0.3, 0.2]
+
+data:
+  families: [gsm8k, hotpotqa, meetingbank, sharegpt]
+  instances_dir: data/raw
+  split: D_train
+  prompts_per_family: 50
+
+target:
+  provider: openai
+  model: gpt-4o-mini
+  model_revision: set_me_explicitly   # pin the dated snapshot
+  price_row: gpt-4o-mini
+
+compressor:
+  backend: llmlingua2
+  cache_dir: data/cache
+
+cost:
+  price_table_version: v1
+  spend_cap_usd: 10.0                 # hard ceiling; the run aborts, not warns
+  estimated_cost_per_call_usd: 0.001

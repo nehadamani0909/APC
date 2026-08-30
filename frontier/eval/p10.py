@@ -1,7 +1,10 @@
-"""Deterministic P10 experiment reports over the available offline fixtures.
+"""Deterministic P10 report SHAPES over offline fixtures.
 
-The report builder keeps the experiment shape and negative findings executable
-while clearly marking the absence of real model/corpus measurements.
+Every number these emit is a hardcoded placeholder that exercises the
+reporting code path.  They are not measurements, and they must never reach
+``paper/``: wrapped in a real BCa interval they read exactly like results.
+Each generated file therefore carries a scaffold banner, and
+``tests/test_no_fabricated_results.py`` fails if one appears under ``paper/``.
 """
 
 from __future__ import annotations
@@ -18,12 +21,22 @@ def _ci(values: list[float]) -> str:
     return f"{interval.estimate:.3f} [{interval.low:.3f}, {interval.high:.3f}]"
 
 
+SCAFFOLD_BANNER = (
+    "> **SCAFFOLD OUTPUT - NOT A RESULT.**\n"
+    "> Every number below is a hardcoded placeholder that exercises the\n"
+    "> reporting code path against offline fixtures. Nothing here was\n"
+    "> measured. Do not cite, quote, or copy any of it into a paper.\n"
+)
+
+
 def _table(path: Path, title: str, header: str, rows: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "# "
         + title
-        + "\n\nOffline deterministic smoke evaluation; all intervals are "
-        + "prompt-level 95% BCa CIs.\n\n"
+        + "\n\n"
+        + SCAFFOLD_BANNER
+        + "\nIntervals are prompt-level 95% BCa CIs over placeholder inputs.\n\n"
         + header
         + "\n"
         + "\n".join(rows)
@@ -68,8 +81,9 @@ def _failure_report(path: Path) -> None:
     lines = [
         "# E11 failure analysis",
         "",
-        "Synthetic fixture examples only; replace outputs with target-model "
-        "traces before publication.",
+        SCAFFOLD_BANNER,
+        "",
+        "Synthetic fixture examples only; replace with target-model traces.",
         "",
     ]
     for category, original, compressed, output, abstention in categories:
@@ -95,7 +109,8 @@ def _failure_report(path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def generate_reports(output_dir: Path = Path("reports")) -> None:
+def generate_reports(output_dir: Path = Path("reports/scaffold")) -> None:
+    """Write the placeholder report shapes. Output is not publishable."""
     output_dir.mkdir(parents=True, exist_ok=True)
     _table(
         output_dir / "t4.md",

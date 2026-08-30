@@ -1,11 +1,18 @@
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
 from frontier.compress.base import WhitespaceTokenizer
-from frontier.compress.baselines import RandomDropCompressor, TruncateTailCompressor
+from frontier.compress.baselines import (
+    RandomDropCompressor,
+    TruncateHeadCompressor,
+    TruncateTailCompressor,
+)
 from frontier.compress.cpc import CPCCompressor
 from frontier.compress.llmlingua2 import LLMLingua2Compressor
+from frontier.compress.llmlingua_base import default_device
 from frontier.compress.longllmlingua import LongLLMLinguaCompressor
 
 
@@ -31,8 +38,25 @@ def test_backends_measure_realised_rate_and_cache(tmp_path: Path) -> None:
         first = backend.compress(context, "question", 0.5)
         second = backend.compress(context, "question", 0.5)
         assert 0.0 <= first.realised_rate <= 1.0
+        assert not first.cache_hit
         assert second.cache_hit
-        assert second.wall_ms == second.gpu_ms == 0.0
+        assert second.compressed_text == first.compressed_text
+        assert second.realised_rate == first.realised_rate
+        # A cache hit replays the originally measured cost rather than
+        # reporting compression as free; callers filter on ``cache_hit``.
+        assert second.wall_ms == first.wall_ms
+        assert second.gpu_ms == first.gpu_ms
+
+
+def test_cache_key_separates_context_from_query(tmp_path: Path) -> None:
+    tokenizer = WhitespaceTokenizer()
+    backend = TruncateTailCompressor(tokenizer, cache_dir=tmp_path)
+    # Naive concatenation would give both of these the same cache key.
+    first = backend.compress("alpha beta", "gamma", 1.0)
+    second = backend.compress("alpha", "beta gamma", 1.0)
+    assert first.compressed_text == "alpha beta"
+    assert second.compressed_text == "alpha"
+    assert not second.cache_hit
 
 
 def test_twenty_prompts_and_five_rates_have_finite_realised_rates() -> None:
@@ -63,3 +87,85 @@ def test_random_drop_is_reproducible() -> None:
 def test_cpc_is_explicitly_unavailable() -> None:
     with pytest.raises(RuntimeError, match="no usable released"):
         CPCCompressor(WhitespaceTokenizer()).compress("text", None, 0.5)
+
+
+class _FakePromptCompressor:
+    """Counts how many times the LLMLingua engine gets constructed."""
+
+    constructions = 0
+
+    def __init__(self, **kwargs: object) -> None:
+        type(self).constructions += 1
+        self.kwargs = kwargs
+
+    def compress_prompt(
+        self, context: list[str], question: str = "", rate: float = 1.0, **_: object
+    ) -> dict[str, str]:
+        words = context[0].split()
+        return {"compressed_prompt": " ".join(words[: round(len(words) * rate)])}
+
+
+def test_llmlingua_engine_is_loaded_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = types.ModuleType("llmlingua")
+    module.PromptCompressor = _FakePromptCompressor  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "llmlingua", module)
+    _FakePromptCompressor.constructions = 0
+
+    backend = LLMLingua2Compressor(WhitespaceTokenizer(), device_map="cpu")
+    for rate in (0.2, 0.4, 0.65, 1.0):
+        assert backend.compress("one two three four five", "q", rate).realised_rate > 0
+    # Constructing the engine per call would reload the model on every one of
+    # the grid's cells.
+    assert _FakePromptCompressor.constructions == 1
+
+
+def test_llmlingua2_defaults_to_a_token_classification_checkpoint() -> None:
+    backend = LLMLingua2Compressor(WhitespaceTokenizer(), device_map="cpu")
+    # Pairing use_llmlingua2=True with a 7B causal LM was incoherent.
+    assert "llmlingua-2" in backend.default_model
+    assert backend.use_llmlingua2 is True
+    assert backend.model_version.endswith("@main")
+    assert LongLLMLinguaCompressor(
+        WhitespaceTokenizer(), device_map="cpu"
+    ).use_llmlingua2 is False
+
+
+def test_device_falls_back_to_cpu_without_cuda() -> None:
+    assert default_device() in {"cpu", "cuda"}
+    backend = LLMLingua2Compressor(WhitespaceTokenizer())
+    assert backend.device_map in {"cpu", "cuda"}
+
+
+MULTILINE = "Question: A?\nAnswer: one two\n\nQuestion: B?\nAnswer: three four"
+
+
+def test_uncompressed_budget_is_an_exact_passthrough() -> None:
+    tokenizer = WhitespaceTokenizer()
+    for backend in (
+        TruncateTailCompressor(tokenizer),
+        TruncateHeadCompressor(tokenizer),
+        RandomDropCompressor(tokenizer, seed=0),
+    ):
+        result = backend.compress(MULTILINE, "q", 1.0)
+        # b = 1.0 is "no compression": rho(x, 1) is the baseline every safety
+        # label is measured against, so it must be byte-identical.
+        assert result.compressed_text == MULTILINE, backend.name
+        assert result.realised_rate == 1.0, backend.name
+
+
+def test_truncation_preserves_original_whitespace() -> None:
+    result = TruncateTailCompressor(WhitespaceTokenizer()).compress(
+        MULTILINE, "q", 0.5
+    )
+    # Rejoining split tokens with single spaces would flatten the blank line
+    # that separates few-shot exemplars and silently reformat the prompt.
+    assert "\n" in result.compressed_text
+    assert MULTILINE.startswith(result.compressed_text)
+
+
+def test_truncate_head_keeps_the_tail() -> None:
+    result = TruncateHeadCompressor(WhitespaceTokenizer()).compress(
+        MULTILINE, "q", 0.5
+    )
+    assert MULTILINE.endswith(result.compressed_text)
+    assert "\n" in result.compressed_text

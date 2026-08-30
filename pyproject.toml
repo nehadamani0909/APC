@@ -61,6 +61,20 @@ module = ["numpy", "numpy.*"]
 follow_imports = "skip"
 ignore_missing_imports = true
 
+# Optional 'real' extra. These are imported lazily inside functions so the
+# offline install stays small; without the overrides, type checking would
+# only pass on machines that happen to have the extra installed.
+[[tool.mypy.overrides]]
+module = [
+  "anthropic", "anthropic.*",
+  "datasets", "datasets.*",
+  "llmlingua", "llmlingua.*",
+  "openai", "openai.*",
+  "torch", "torch.*",
+  "transformers", "transformers.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

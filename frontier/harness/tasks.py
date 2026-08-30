@@ -8,6 +8,7 @@ offline and reproducible; no benchmark data is silently downloaded.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,13 +123,65 @@ class JsonlTask:
 
 
 class GSM8KTask(JsonlTask):
+    """Few-shot CoT reasoning, graded on the final numeric answer."""
+
+    _NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
     def __init__(self, source: str | Path | None = None) -> None:
         super().__init__("gsm8k", "reason", source=source, metric_fn=exact_match)
 
+    def build_prompt(self, ctx: str, query: str) -> str:
+        # ctx is the (compressed) few-shot exemplar block, so the question
+        # continues the same Question/Answer pattern the exemplars establish.
+        return f"{ctx}\n\nQuestion: {query}\nAnswer:"
+
+    #: The exemplar block joins Question/Answer pairs with a blank line and no
+    #: answer contains one, so a blank line marks the end of this instance's
+    #: answer. Observed continuations are not always "Question:" -- the model
+    #: also invents "### Problem 7:" style headers -- so the blank line is the
+    #: reliable boundary.
+    STOP_SEQUENCES = ("\n\n", "\nQuestion:")
+
+    def parse(self, raw: str) -> str:
+        """Extract the numeric answer from a chain-of-thought response.
+
+        Three failure modes this has to survive.  Without numeric extraction,
+        reasoning text is compared verbatim against a bare numeral.  Without
+        truncating at the answer boundary, a hallucinated follow-up question
+        contributes numbers of its own.  And taking the *last* number rather
+        than the one after the first ``####`` picks up those hallucinations
+        even when the real answer was correct.  Each one flattens the quality
+        curve, and a flat curve makes Gate 1 measure nothing.
+        """
+
+        text = raw
+        for stop in self.STOP_SEQUENCES:
+            text = text.split(stop)[0]
+        if "####" in text:
+            # The first marker terminates this instance's answer.
+            text = text.split("####")[1]
+            matches = self._NUMBER.findall(text.replace(",", ""))
+            if matches:
+                return str(matches[0]).rstrip(".")
+        matches = self._NUMBER.findall(text.replace(",", ""))
+        if not matches:
+            return raw.strip()
+        return str(matches[-1]).rstrip(".")
+
 
 class LongBenchTask(JsonlTask):
-    def __init__(self, subset: str, source: str | Path | None = None) -> None:
-        super().__init__(subset, "multidoc_qa", source=source, metric_fn=token_f1)
+    def __init__(
+        self,
+        subset: str,
+        source: str | Path | None = None,
+        family: Family | None = None,
+    ) -> None:
+        super().__init__(
+            subset,
+            family or LONGBENCH_FAMILIES.get(subset, "multidoc_qa"),
+            source=source,
+            metric_fn=token_f1,
+        )
 
 
 class MeetingBankTask(JsonlTask):
@@ -159,6 +212,18 @@ LONGBENCH_SUBSETS = (
     "code",
     "synthetic",
 )
+
+# The six LongBench sub-families do not all map onto distinct ``Family``
+# labels, so the sub-family itself is carried in each instance's
+# ``meta["subfamily"]`` for the E6b leave-one-family-out split.
+LONGBENCH_FAMILIES: dict[str, Family] = {
+    "multidoc_qa": "multidoc_qa",
+    "single_doc_qa": "qa",
+    "summarisation": "summ",
+    "few_shot": "qa",
+    "code": "code",
+    "synthetic": "qa",
+}
 
 
 def default_tasks(source_dir: str | Path | None = None) -> list[Task]:

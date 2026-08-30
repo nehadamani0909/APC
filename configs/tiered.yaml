@@ -1,0 +1,12 @@
+# Full tiered grid (APC-05 §4.1). Tier A carries training and all
+# instance-level analysis; the API tiers run a family-stratified subset of
+# the SAME prompts so cross-model comparison stays paired.
+tiers:
+  A: {prompts: 6000, budgets: 7, samples: 5, provider: hf,     purpose: main corpus}
+  B: {prompts: 1200, budgets: 7, samples: 1, provider: openai, purpose: cross-model}
+  C: {prompts: 1200, budgets: 7, samples: 1, provider: anthropic, purpose: cross-model}
+  D: {prompts: 800,  budgets: 7, samples: 5, provider: hf,     purpose: cross-compressor}
+
+cost:
+  price_table_version: v1
+  spend_cap_usd: set_me_explicitly

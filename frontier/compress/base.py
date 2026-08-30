@@ -50,12 +50,23 @@ def realised_rate(
 
     original_count = len(tokenizer.encode(original))
     if original_count == 0:
-        return 1.0 if not compressed else 0.0
+        # An empty context cannot be compressed; anything the backend emits
+        # for it is an expansion, not a rate in (0, 1].
+        return 1.0
     return len(tokenizer.encode(compressed)) / original_count
 
 
 class CachedCompressor:
-    """Cache wrapper that keeps cached calls out of timing measurements."""
+    """Content-addressed cache around a text compressor.
+
+    A cache hit replays the timings measured when the entry was first
+    written, and flags itself with ``cache_hit``.  ``compress_ms`` and
+    ``gpu_seconds`` are cost inputs -- the ``c_comp`` term of the APC-03 C2
+    objective and the E10 net-efficiency accounting -- so zeroing them would
+    make compression look free on every re-run, and the build plan budgets
+    for a full re-run.  Latency benchmarks should filter on ``cache_hit``
+    instead.
+    """
 
     def __init__(self, backend: Compressor, cache_dir: str | Path = "data/cache"):
         self.backend = backend
@@ -69,8 +80,25 @@ class CachedCompressor:
     def backend_version(self) -> str:
         return self.backend.backend_version
 
+    @property
+    def model_version(self) -> str:
+        return str(getattr(self.backend, "model_version", "unversioned"))
+
     def _path(self, ctx: str, query: str | None, rate: float) -> Path:
-        material = f"{ctx}{query or ''}{self.name}{rate}{self.backend_version}"
+        # JSON-encoded so field boundaries are unambiguous, and keyed on the
+        # model version too: two checkpoints of the same backend at the same
+        # package version would otherwise collide.
+        material = json.dumps(
+            [
+                ctx,
+                query or "",
+                self.name,
+                f"{float(rate):.8f}",
+                self.backend_version,
+                self.model_version,
+            ],
+            separators=(",", ":"),
+        )
         digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{digest}.json"
 
@@ -84,8 +112,8 @@ class CachedCompressor:
             return CompressedResult(
                 cached.compressed_text,
                 cached.realised_rate,
-                0.0,
-                0.0,
+                cached.wall_ms,
+                cached.gpu_ms,
                 cached.model_version,
                 cache_hit=True,
             )
@@ -135,7 +163,15 @@ class TextCompressor:
     ) -> CompressedResult:
         validate_rate(rate)
         started = time.perf_counter()
-        compressed, gpu_ms = self._compress_text(ctx, query, rate)
+        if rate >= 1.0:
+            # b = 1.0 is "no compression" (APC-04 §3.1), so it must be an
+            # exact passthrough. rho(x, 1) is the baseline that every safety
+            # label and the whole degradation loss are measured against; a
+            # backend that reformats the text here -- even only normalising
+            # whitespace -- corrupts that baseline and every label built on it.
+            compressed, gpu_ms = ctx, 0.0
+        else:
+            compressed, gpu_ms = self._compress_text(ctx, query, rate)
         wall_ms = (time.perf_counter() - started) * 1000.0
         return CompressedResult(
             compressed,

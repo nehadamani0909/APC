@@ -1,4 +1,9 @@
-"""Regenerate P9 smoke tables and publication-style vector figures."""
+"""Regenerate the P9 report SHAPES from placeholder inputs.
+
+The figures are hand-drawn SVG paths and the tables are computed from
+hardcoded values. They demonstrate the output format; they are not results,
+and they are written to reports/scaffold rather than paper/.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ import numpy as np
 
 from frontier.eval.metrics import minimum_detectable_effect, paired_bca
 
-OUT = Path("reports")
+OUT = Path("reports/scaffold")
 
 
 def _svg(name: str, title: str, body: str) -> None:
@@ -16,8 +21,14 @@ def _svg(name: str, title: str, body: str) -> None:
         '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" '
         'viewBox="0 0 720 400"><rect width="100%" height="100%" fill="white"/>'
         '<text x="30" y="35" font-family="sans-serif" font-size="20">'
-        f"{title}</text>{body}</svg>"
+        f"{title}</text>{body}"
+        # Burned into the image itself, so the caveat survives being dropped
+        # into a slide or a draft.
+        '<text x="30" y="392" font-family="sans-serif" font-size="13" '
+        'fill="#B00020">SCAFFOLD - illustrative shape only, not measured '
+        "data</text></svg>"
     )
+    OUT.mkdir(parents=True, exist_ok=True)
     (OUT / name).write_text(content, encoding="utf-8")
 
 
@@ -69,7 +80,7 @@ def main() -> None:
         '<rect x="260" y="130" width="80" height="170" fill="#D55E00"/>'
         '<rect x="420" y="90" width="80" height="210" fill="#009E73"/>',
     )
-    print(f"wrote P9 artifacts to {OUT}")
+    print(f"wrote SCAFFOLD placeholders to {OUT} (not results)")
 
 
 if __name__ == "__main__":

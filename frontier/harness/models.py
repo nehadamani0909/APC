@@ -111,8 +111,9 @@ def run_task_once(
         temperature=temperature,
         seed=seed,
     )
+    price_table_version = getattr(target, "price_table_version", PRICE_TABLE_VERSION)
     usd_in, usd_out, usd_total = cost_from_tokens(
-        target.model, result.T_in, result.T_out
+        target.model, result.T_in, result.T_out, price_table_version
     )
     if abs(usd_total - result.usd) > max(1e-9, usd_total) * 0.01:
         raise ValueError("target adapter USD does not reconcile with provider usage")
@@ -138,7 +139,7 @@ def run_task_once(
         gpu_seconds=0.0,
         raw_output_hash=hashlib.sha256(result.text.encode()).hexdigest(),
         code_version=f"{code_version};model_revision={target.model_revision}",
-        price_table_version="v1",
+        price_table_version=price_table_version,
     )
     ledger.append(row)
     return row
@@ -159,6 +160,7 @@ class VLLMBackend:
         *,
         model: str,
         model_revision: str,
+        price_table_version: str = PRICE_TABLE_VERSION,
     ) -> None:
         generate = getattr(engine, "generate", None)
         if not callable(generate):
@@ -169,6 +171,7 @@ class VLLMBackend:
         self.sampling_params_factory = sampling_params_factory
         self.model = model
         self.model_revision = model_revision
+        self.price_table_version = price_table_version
 
     def generate(
         self, prompt: str, *, temperature: float = 0.0, seed: int = 0
@@ -192,7 +195,9 @@ class VLLMBackend:
             raise TypeError(
                 "Unexpected vLLM output; provider usage could not be read"
             ) from exc
-        usd = cost_from_tokens(self.model, input_tokens, output_tokens, "v1")[2]
+        usd = cost_from_tokens(
+            self.model, input_tokens, output_tokens, self.price_table_version
+        )[2]
         return GenerationResult(
             text,
             input_tokens,

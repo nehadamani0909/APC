@@ -44,3 +44,34 @@ def test_features_do_not_call_target_llm(monkeypatch: MonkeyPatch) -> None:
 
     monkeypatch.setattr("frontier.harness.models.APIBackend.generate", fail)
     SurfaceExtractor().extract("p", "context", "query")
+
+
+def test_tiered_extractor_composes_and_sums_latency() -> None:
+    from frontier.features.registry import TieredExtractor
+
+    class Scorer:
+        def token_nll(self, text: str, *, condition: str | None = None) -> list[float]:
+            return [0.5, 1.5, 2.5]
+
+    class Enc:
+        def encode(self, text: str) -> list[float]:
+            return [1.0, 0.0, 1.0]
+
+    l0 = TieredExtractor()
+    assert l0.tier == "L0"
+    full = TieredExtractor(small_lm=Scorer(), encoder=Enc())
+    assert full.tier == "L0+L1+L2"
+
+    base = l0.extract("p", "some context here.", "a query")
+    combined = full.extract("p", "some context here.", "a query")
+    # L0 features survive composition, and the higher tiers add to them.
+    assert set(base.features).issubset(set(combined.features))
+    assert len(combined.features) > len(base.features)
+    assert "nll_mean" in combined.features
+    assert "context_query_cosine" in combined.features
+    # Latency is accumulated across tiers rather than overwritten by the
+    # last one, because the APC-04 5.2 overhead budget applies to the whole
+    # stack. Comparing two wall-clock measurements would be flaky under CPU
+    # contention, so this asserts the structural property instead.
+    assert combined.latency_ms > 0.0
+    assert len(full.extractors) == 3
