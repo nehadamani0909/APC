@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from frontier.compress.base import WhitespaceTokenizer
-from frontier.compress.baselines import RandomDropCompressor, TruncateTailCompressor
+from frontier.compress.baselines import (
+    RandomDropCompressor,
+    TruncateHeadCompressor,
+    TruncateTailCompressor,
+)
 from frontier.compress.cpc import CPCCompressor
 from frontier.compress.llmlingua2 import LLMLingua2Compressor
 from frontier.compress.llmlingua_base import default_device
@@ -130,3 +134,38 @@ def test_device_falls_back_to_cpu_without_cuda() -> None:
     assert default_device() in {"cpu", "cuda"}
     backend = LLMLingua2Compressor(WhitespaceTokenizer())
     assert backend.device_map in {"cpu", "cuda"}
+
+
+MULTILINE = "Question: A?\nAnswer: one two\n\nQuestion: B?\nAnswer: three four"
+
+
+def test_uncompressed_budget_is_an_exact_passthrough() -> None:
+    tokenizer = WhitespaceTokenizer()
+    for backend in (
+        TruncateTailCompressor(tokenizer),
+        TruncateHeadCompressor(tokenizer),
+        RandomDropCompressor(tokenizer, seed=0),
+    ):
+        result = backend.compress(MULTILINE, "q", 1.0)
+        # b = 1.0 is "no compression": rho(x, 1) is the baseline every safety
+        # label is measured against, so it must be byte-identical.
+        assert result.compressed_text == MULTILINE, backend.name
+        assert result.realised_rate == 1.0, backend.name
+
+
+def test_truncation_preserves_original_whitespace() -> None:
+    result = TruncateTailCompressor(WhitespaceTokenizer()).compress(
+        MULTILINE, "q", 0.5
+    )
+    # Rejoining split tokens with single spaces would flatten the blank line
+    # that separates few-shot exemplars and silently reformat the prompt.
+    assert "\n" in result.compressed_text
+    assert MULTILINE.startswith(result.compressed_text)
+
+
+def test_truncate_head_keeps_the_tail() -> None:
+    result = TruncateHeadCompressor(WhitespaceTokenizer()).compress(
+        MULTILINE, "q", 0.5
+    )
+    assert MULTILINE.endswith(result.compressed_text)
+    assert "\n" in result.compressed_text

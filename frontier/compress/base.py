@@ -163,7 +163,15 @@ class TextCompressor:
     ) -> CompressedResult:
         validate_rate(rate)
         started = time.perf_counter()
-        compressed, gpu_ms = self._compress_text(ctx, query, rate)
+        if rate >= 1.0:
+            # b = 1.0 is "no compression" (APC-04 §3.1), so it must be an
+            # exact passthrough. rho(x, 1) is the baseline that every safety
+            # label and the whole degradation loss are measured against; a
+            # backend that reformats the text here -- even only normalising
+            # whitespace -- corrupts that baseline and every label built on it.
+            compressed, gpu_ms = ctx, 0.0
+        else:
+            compressed, gpu_ms = self._compress_text(ctx, query, rate)
         wall_ms = (time.perf_counter() - started) * 1000.0
         return CompressedResult(
             compressed,

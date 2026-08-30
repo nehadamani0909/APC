@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from threading import Lock, Semaphore
 from typing import Any
@@ -181,6 +182,7 @@ class HFClient:
         revision: str = "main",
         device: str = "cpu",
         max_new_tokens: int = 256,
+        stop: Sequence[str] | None = None,
         model_obj: Any = None,
         tokenizer_obj: Any = None,
     ) -> None:
@@ -188,6 +190,11 @@ class HFClient:
         self.revision = revision
         self.device = device
         self.max_new_tokens = max_new_tokens
+        # A few-shot model keeps generating further Question/Answer pairs
+        # after it has answered. Stopping there is both a correctness fix and
+        # a large speed win: it is the difference between running to the
+        # token cap on every call and stopping after the actual answer.
+        self.stop = tuple(stop or ())
         self._model = model_obj
         self._tokenizer = tokenizer_obj
 
@@ -223,6 +230,10 @@ class HFClient:
         torch.manual_seed(seed)
         encoded = tokenizer(prompt, return_tensors="pt").to(self.device)
         input_tokens = int(encoded["input_ids"].shape[-1])
+        options: dict[str, Any] = {}
+        if self.stop:
+            options["stop_strings"] = list(self.stop)
+            options["tokenizer"] = tokenizer
         with torch.no_grad():
             generated = model.generate(
                 **encoded,
@@ -230,9 +241,12 @@ class HFClient:
                 do_sample=temperature > 0.0,
                 temperature=temperature if temperature > 0.0 else None,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                **options,
             )
         completion = generated[0][input_tokens:]
         text = tokenizer.decode(completion, skip_special_tokens=True)
+        # T_out is the number of tokens actually generated, which is what the
+        # cost model and the output-expansion head (C2) are measuring.
         return ProviderResponse(text, input_tokens, int(completion.shape[-1]))
 
 

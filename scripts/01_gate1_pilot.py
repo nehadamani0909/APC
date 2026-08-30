@@ -75,7 +75,9 @@ def load_pilot_instances(
     return pairs
 
 
-def build_target(args: argparse.Namespace) -> tuple[TargetLLM, Any]:
+def build_target(
+    args: argparse.Namespace, task_for_stop: Task
+) -> tuple[TargetLLM, Any]:
     """Return the target adapter and a tokenizer for realised-rate measurement."""
 
     if args.provider == "hf":
@@ -86,6 +88,10 @@ def build_target(args: argparse.Namespace) -> tuple[TargetLLM, Any]:
             revision=args.model_revision,
             device=args.device,
             max_new_tokens=args.max_new_tokens,
+            # Task-specific: a few-shot model must stop before inventing the
+            # next question. Kept on the client so the frozen Task protocol
+            # is untouched.
+            stop=getattr(task_for_stop, "STOP_SEQUENCES", ()),
         )
         backend = APIBackend(
             local_client,
@@ -177,7 +183,7 @@ def main() -> None:
         print("dry run: no model loaded, nothing executed")
         return
 
-    target, tokenizer = build_target(args)
+    target, tokenizer = build_target(args, pairs[0][0])
     compressor = build_compressor(args, tokenizer)
     ledger = Ledger(args.ledger, phase="gate1-pilot")
     runner = GridRunner(

@@ -135,15 +135,34 @@ class GSM8KTask(JsonlTask):
         # continues the same Question/Answer pattern the exemplars establish.
         return f"{ctx}\n\nQuestion: {query}\nAnswer:"
 
-    def parse(self, raw: str) -> str:
-        """Extract the final numeric answer from a chain-of-thought answer.
+    #: The exemplar block joins Question/Answer pairs with a blank line and no
+    #: answer contains one, so a blank line marks the end of this instance's
+    #: answer. Observed continuations are not always "Question:" -- the model
+    #: also invents "### Problem 7:" style headers -- so the blank line is the
+    #: reliable boundary.
+    STOP_SEQUENCES = ("\n\n", "\nQuestion:")
 
-        Without this the model's reasoning text is compared verbatim against
-        a bare numeral, exact_match is 0 for every budget, and the resulting
-        flat quality curve would make Gate 1 measure nothing.
+    def parse(self, raw: str) -> str:
+        """Extract the numeric answer from a chain-of-thought response.
+
+        Three failure modes this has to survive.  Without numeric extraction,
+        reasoning text is compared verbatim against a bare numeral.  Without
+        truncating at the answer boundary, a hallucinated follow-up question
+        contributes numbers of its own.  And taking the *last* number rather
+        than the one after the first ``####`` picks up those hallucinations
+        even when the real answer was correct.  Each one flattens the quality
+        curve, and a flat curve makes Gate 1 measure nothing.
         """
 
-        text = raw.split("####")[-1] if "####" in raw else raw
+        text = raw
+        for stop in self.STOP_SEQUENCES:
+            text = text.split(stop)[0]
+        if "####" in text:
+            # The first marker terminates this instance's answer.
+            text = text.split("####")[1]
+            matches = self._NUMBER.findall(text.replace(",", ""))
+            if matches:
+                return str(matches[0]).rstrip(".")
         matches = self._NUMBER.findall(text.replace(",", ""))
         if not matches:
             return raw.strip()
