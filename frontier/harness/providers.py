@@ -162,6 +162,80 @@ class CachedProvider:
         return response
 
 
+class HFClient:
+    """Local `transformers` generation, for the tier where the k=5 grid runs.
+
+    Token counts come from the model's own tokenizer, which for a local model
+    *is* the authoritative count -- the APC-04 §4.2 rule against local
+    re-tokenisation is about not second-guessing an API provider's reported
+    usage, and there is no provider here.
+
+    No spend cap: local inference costs GPU/CPU seconds, which the ledger
+    records separately as ``gpu_seconds``.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        revision: str = "main",
+        device: str = "cpu",
+        max_new_tokens: int = 256,
+        model_obj: Any = None,
+        tokenizer_obj: Any = None,
+    ) -> None:
+        self.model_name = model
+        self.revision = revision
+        self.device = device
+        self.max_new_tokens = max_new_tokens
+        self._model = model_obj
+        self._tokenizer = tokenizer_obj
+
+    def _load(self) -> tuple[Any, Any]:
+        if self._model is None or self._tokenizer is None:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                self.model_name, revision=self.revision
+            )
+            self._model = AutoModelForCausalLM.from_pretrained(
+                self.model_name, revision=self.revision
+            ).to(self.device)
+            self._model.eval()
+        return self._model, self._tokenizer
+
+    def load_tokenizer(self) -> Any:
+        """The target model's tokenizer, for measuring the realised rate.
+
+        Rate adherence (C4) is defined against the tokenizer that determines
+        cost, which is the target model's -- not the compressor's.
+        """
+        return self._load()[1]
+
+    def generate(
+        self, prompt: str, *, temperature: float, seed: int
+    ) -> ProviderResponse:
+        import torch
+
+        model, tokenizer = self._load()
+        # Seeded so a k>1 sample at T>0 is reproducible, which the ledger
+        # records alongside the sample index.
+        torch.manual_seed(seed)
+        encoded = tokenizer(prompt, return_tensors="pt").to(self.device)
+        input_tokens = int(encoded["input_ids"].shape[-1])
+        with torch.no_grad():
+            generated = model.generate(
+                **encoded,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=temperature > 0.0,
+                temperature=temperature if temperature > 0.0 else None,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            )
+        completion = generated[0][input_tokens:]
+        text = tokenizer.decode(completion, skip_special_tokens=True)
+        return ProviderResponse(text, input_tokens, int(completion.shape[-1]))
+
+
 class _CappedClient:
     """Shared spend-cap bookkeeping for the API clients."""
 

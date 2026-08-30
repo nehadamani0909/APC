@@ -8,6 +8,7 @@ offline and reproducible; no benchmark data is silently downloaded.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,8 +123,31 @@ class JsonlTask:
 
 
 class GSM8KTask(JsonlTask):
+    """Few-shot CoT reasoning, graded on the final numeric answer."""
+
+    _NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
     def __init__(self, source: str | Path | None = None) -> None:
         super().__init__("gsm8k", "reason", source=source, metric_fn=exact_match)
+
+    def build_prompt(self, ctx: str, query: str) -> str:
+        # ctx is the (compressed) few-shot exemplar block, so the question
+        # continues the same Question/Answer pattern the exemplars establish.
+        return f"{ctx}\n\nQuestion: {query}\nAnswer:"
+
+    def parse(self, raw: str) -> str:
+        """Extract the final numeric answer from a chain-of-thought answer.
+
+        Without this the model's reasoning text is compared verbatim against
+        a bare numeral, exact_match is 0 for every budget, and the resulting
+        flat quality curve would make Gate 1 measure nothing.
+        """
+
+        text = raw.split("####")[-1] if "####" in raw else raw
+        matches = self._NUMBER.findall(text.replace(",", ""))
+        if not matches:
+            return raw.strip()
+        return str(matches[-1]).rstrip(".")
 
 
 class LongBenchTask(JsonlTask):
