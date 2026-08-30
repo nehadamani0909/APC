@@ -89,7 +89,7 @@ def load_huggingface(
 ) -> list[Instance]:
     """Load and normalize one HF dataset; import is optional until this is called."""
     try:
-        from datasets import load_dataset  # type: ignore[import-untyped]
+        from datasets import load_dataset
     except ImportError as exc:
         raise RuntimeError("install the 'real' extra to use Hugging Face ETL") from exc
     dataset = load_dataset(

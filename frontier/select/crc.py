@@ -61,7 +61,21 @@ def calibrate_crc(
     true_quality: Array,
     epsilon: float,
 ) -> CRCResult:
-    """Implement ``inf{λ: n/(n+1) Rhat + 1/(n+1) <= ε}`` on calibration data."""
+    """Implement ``inf{λ: n/(n+1) Rhat + 1/(n+1) <= ε}`` on calibration data.
+
+    The CRC bound (Angelopoulos et al., ICLR 2024) requires the risk to be
+    non-increasing in ``λ``.  Population risk is monotone here by
+    construction — raising ``λ`` shrinks the feasible set toward ``{1.0}``
+    (APC-04 §3.4) — but the *empirical* ``Rhat_n`` is a step function over a
+    finite sample and need not be, which matters precisely because this
+    project's premise is that measured quality curves are non-monotone
+    (audit D1).  Taking the smallest admissible ``λ`` would then be free to
+    land in a spurious low-risk pocket and silently void the guarantee.
+
+    So admissibility is required to hold across the whole suffix ``λ' >= λ``,
+    the same monotone-safe construction used for ``b*`` in APC-04 §3.2.  On
+    genuinely monotone risk this returns exactly the classical threshold.
+    """
 
     if len(predicted_quality) == 0:
         raise ValueError("CRC calibration requires at least one example")
@@ -75,10 +89,13 @@ def calibrate_crc(
         )
         for lambda_value in candidates
     }
-    admissible = [
-        lambda_value
-        for lambda_value, risk in risks.items()
-        if (n / (n + 1.0)) * risk + 1.0 / (n + 1.0) <= epsilon
-    ]
-    lambda_hat = min(admissible) if admissible else 1.0
+    ordered = sorted(risks)
+    lambda_hat = 1.0
+    suffix_admissible = True
+    for lambda_value in reversed(ordered):
+        bound = (n / (n + 1.0)) * risks[lambda_value] + 1.0 / (n + 1.0)
+        if bound > epsilon:
+            suffix_admissible = False
+        if suffix_admissible:
+            lambda_hat = lambda_value
     return CRCResult(lambda_hat, epsilon, risks)

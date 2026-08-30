@@ -37,7 +37,7 @@ class LongLLMLinguaCompressor(TextCompressor):
     ) -> tuple[str, float]:
         if self.compressor is None:
             try:
-                from llmlingua import PromptCompressor  # type: ignore[import-untyped]
+                from llmlingua import PromptCompressor
             except ImportError as exc:
                 raise RuntimeError(
                     "install the 'real' extra for LongLLMLingua"
