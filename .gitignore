@@ -8,3 +8,8 @@ data/cache/*
 !data/cache/.gitkeep
 data/pilot/
 reports/
+data/raw/*
+!data/raw/.gitkeep
+data/splits/*
+!data/splits/.gitkeep
+*.parquet.tmp
