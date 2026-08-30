@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 from frontier.compress.base import Compressor
 from frontier.harness.ledger import GridRow, Ledger, read_ledger
@@ -58,6 +59,7 @@ class GridRunner:
         self.ledger = ledger
         self.completion_index = Path(completion_index)
         self.failure_index = Path(failure_index) if failure_index is not None else None
+        self._write_lock = Lock()
         self.completed = self._read_completed()
 
     def _read_completed(self) -> set[str]:
@@ -91,64 +93,101 @@ class GridRunner:
     def _mark_failed(self, cell: GridCell, error: Exception) -> None:
         if self.failure_index is None:
             return
-        self.failure_index.parent.mkdir(parents=True, exist_ok=True)
-        with self.failure_index.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"key": cell.key, "error": str(error)}) + "\n")
+        with self._write_lock:
+            self.failure_index.parent.mkdir(parents=True, exist_ok=True)
+            with self.failure_index.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "key": cell.key,
+                            "prompt_id": cell.instance.id,
+                            "backend": cell.backend.name,
+                            "requested_b": cell.requested_b,
+                            "target_model": cell.target.model,
+                            "sample_idx": cell.sample_idx,
+                            "error_type": type(error).__name__,
+                            "error": str(error),
+                        }
+                    )
+                    + "\n"
+                )
+
+    def _build_row(self, cell: GridCell) -> GridRow:
+        """Execute one cell. Every failure mode raises rather than aborting."""
+
+        compressed = cell.backend.compress(
+            cell.instance.context, cell.instance.query, cell.requested_b
+        )
+        prompt = cell.task.build_prompt(
+            compressed.compressed_text, cell.instance.query
+        )
+        generation = cell.target.generate(
+            prompt, temperature=cell.temperature, seed=cell.seed
+        )
+        # Reconcile against the price table the target actually billed with,
+        # not the module default: an adapter constructed with a pinned older
+        # version would otherwise be compared against the wrong prices.
+        price_table_version = getattr(
+            cell.target, "price_table_version", PRICE_TABLE_VERSION
+        )
+        usd_in, usd_out, usd_total = cost_from_tokens(
+            cell.target.model,
+            generation.T_in,
+            generation.T_out,
+            price_table_version,
+        )
+        if abs(usd_total - generation.usd) > max(1e-9, usd_total) * 0.01:
+            raise ValueError(
+                f"target usage cost does not reconcile: ledger={usd_total} "
+                f"provider={generation.usd}"
+            )
+        return GridRow(
+            prompt_id=cell.instance.id,
+            task=cell.task.name,
+            family=cell.task.family,
+            backend=cell.backend.name,
+            requested_b=cell.requested_b,
+            realised_r=compressed.realised_rate,
+            target_model=cell.target.model,
+            sample_idx=cell.sample_idx,
+            temperature=cell.temperature,
+            seed=cell.seed,
+            quality=cell.task.metric(
+                cell.task.parse(generation.text), cell.instance.gold
+            ),
+            T_in=generation.T_in,
+            T_out=generation.T_out,
+            latency_ms=generation.latency_s * 1000.0,
+            compress_ms=compressed.wall_ms,
+            usd_in=usd_in,
+            usd_out=usd_out,
+            usd_total=usd_total,
+            gpu_seconds=compressed.gpu_ms / 1000.0,
+            raw_output_hash=hashlib.sha256(generation.text.encode()).hexdigest(),
+            code_version=f"p3;model_revision={cell.target.model_revision}",
+            price_table_version=price_table_version,
+        )
 
     def run(self, cells: Iterable[GridCell]) -> int:
         executed = 0
         for cell in cells:
             if cell.key in self.completed:
                 continue
+            # The guarded region deliberately covers cost reconciliation,
+            # metric evaluation, and GridRow validation as well as the model
+            # calls. Each of those can raise on a single bad cell, and a grid
+            # of this size must record the failure and keep going.
             try:
-                compressed = cell.backend.compress(
-                    cell.instance.context, cell.instance.query, cell.requested_b
-                )
-                prompt = cell.task.build_prompt(
-                    compressed.compressed_text, cell.instance.query
-                )
-                generation = cell.target.generate(
-                    prompt, temperature=cell.temperature, seed=cell.seed
-                )
+                row = self._build_row(cell)
             except Exception as error:
                 self._mark_failed(cell, error)
                 continue
-            usd_in, usd_out, usd_total = cost_from_tokens(
-                cell.target.model,
-                generation.T_in,
-                generation.T_out,
-                PRICE_TABLE_VERSION,
-            )
-            if abs(usd_total - generation.usd) > max(1e-9, usd_total) * 0.01:
-                raise ValueError("target usage cost does not reconcile")
-            row = GridRow(
-                prompt_id=cell.instance.id,
-                task=cell.task.name,
-                family=cell.task.family,
-                backend=cell.backend.name,
-                requested_b=cell.requested_b,
-                realised_r=compressed.realised_rate,
-                target_model=cell.target.model,
-                sample_idx=cell.sample_idx,
-                temperature=cell.temperature,
-                seed=cell.seed,
-                quality=cell.task.metric(
-                    cell.task.parse(generation.text), cell.instance.gold
-                ),
-                T_in=generation.T_in,
-                T_out=generation.T_out,
-                latency_ms=generation.latency_s * 1000.0,
-                compress_ms=compressed.wall_ms,
-                usd_in=usd_in,
-                usd_out=usd_out,
-                usd_total=usd_total,
-                gpu_seconds=compressed.gpu_ms / 1000.0,
-                raw_output_hash=hashlib.sha256(generation.text.encode()).hexdigest(),
-                code_version=f"p3;model_revision={cell.target.model_revision}",
-                price_table_version=PRICE_TABLE_VERSION,
-            )
-            self.ledger.append(row)
-            self._mark_completed(cell)
+            # Appending the row and marking the cell complete must be atomic
+            # with respect to other workers: on Windows, concurrent appends
+            # to the same file are not guaranteed not to interleave.
+            with self._write_lock:
+                self.ledger.append(row)
+                self._mark_completed(cell)
             executed += 1
         return executed
 
@@ -157,8 +196,17 @@ class GridRunner:
         if workers <= 1:
             return self.run(cells)
         pending = [cell for cell in cells if cell.key not in self.completed]
+        if not pending:
+            return 0
+        # One future per chunk rather than per cell; a full grid is hundreds
+        # of thousands of cells and one future each is pure overhead.
+        chunk_size = max(1, (len(pending) + workers - 1) // workers)
+        chunks = [
+            pending[start : start + chunk_size]
+            for start in range(0, len(pending), chunk_size)
+        ]
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(self.run, [cell]) for cell in pending]
+            futures = [executor.submit(self.run, chunk) for chunk in chunks]
             return sum(future.result() for future in as_completed(futures))
 
 

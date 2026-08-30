@@ -31,8 +31,25 @@ def test_backends_measure_realised_rate_and_cache(tmp_path: Path) -> None:
         first = backend.compress(context, "question", 0.5)
         second = backend.compress(context, "question", 0.5)
         assert 0.0 <= first.realised_rate <= 1.0
+        assert not first.cache_hit
         assert second.cache_hit
-        assert second.wall_ms == second.gpu_ms == 0.0
+        assert second.compressed_text == first.compressed_text
+        assert second.realised_rate == first.realised_rate
+        # A cache hit replays the originally measured cost rather than
+        # reporting compression as free; callers filter on ``cache_hit``.
+        assert second.wall_ms == first.wall_ms
+        assert second.gpu_ms == first.gpu_ms
+
+
+def test_cache_key_separates_context_from_query(tmp_path: Path) -> None:
+    tokenizer = WhitespaceTokenizer()
+    backend = TruncateTailCompressor(tokenizer, cache_dir=tmp_path)
+    # Naive concatenation would give both of these the same cache key.
+    first = backend.compress("alpha beta", "gamma", 1.0)
+    second = backend.compress("alpha", "beta gamma", 1.0)
+    assert first.compressed_text == "alpha beta"
+    assert second.compressed_text == "alpha"
+    assert not second.cache_hit
 
 
 def test_twenty_prompts_and_five_rates_have_finite_realised_rates() -> None:

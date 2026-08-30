@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -96,19 +97,25 @@ class Ledger:
         self.path = Path(path)
         self.run_id = str(uuid4())
         self.phase = phase
+        # POSIX makes short O_APPEND writes effectively atomic; Windows does
+        # not, so parallel grid workers need an explicit lock or the ledger
+        # interleaves and becomes unparseable.
+        self._lock = Lock()
 
     def append(self, row: GridRow) -> None:
         """Append exactly one JSON object, creating parent directories if needed."""
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         record = asdict(row)
         # ``ts`` is mandatory ledger metadata in APC-04 §4.4, but is not part
         # of the frozen GridRow data contract in §8.
         record["run_id"] = self.run_id
         record["phase"] = self.phase
         record["ts"] = datetime.now(UTC).isoformat()
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+        line = json.dumps(record, separators=(",", ":")) + "\n"
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
 
     def append_many(self, rows: Iterable[GridRow]) -> None:
         for row in rows:
