@@ -47,6 +47,7 @@ def test_build_curves_averages_samples_per_budget() -> None:
             "quality": quality,
             "realised_r": float(budget),
             "T_out": 10.0,
+            "T_in": 100.0,
             "sample_idx": sample,
         }
         for budget in BUDGETS
@@ -58,3 +59,4 @@ def test_build_curves_averages_samples_per_budget() -> None:
     # Graded rho is the mean over the k samples, not a binary collapse.
     assert np.allclose(curves.quality, 0.5)
     assert curves.quality.shape == (1, len(BUDGETS))
+    assert curves.input_tokens.shape == (1, len(BUDGETS))

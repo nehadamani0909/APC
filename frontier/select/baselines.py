@@ -5,10 +5,14 @@ from __future__ import annotations
 import gzip
 import random
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+import numpy as np
 
 from frontier.select.policy import Policy, RiskControlledPolicy, Selection
 
+Array = np.ndarray[Any, np.dtype[np.float64]]
 BUDGETS = (0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0)
 
 
@@ -113,6 +117,81 @@ class CachingSensitivityPolicy(FixedBudgetPolicy):
     """B8: fixed operating point used in cache-hit sensitivity sweeps."""
 
 
+class PerFamilyFixedPolicy:
+    """B2b/B2c: a validation-tuned fixed budget, looked up by task family.
+
+    Gate 3 is defined against B2b, so this is the bar the method has to
+    clear. It must be genuinely tuned on held-out data rather than pinned to
+    a constant, or the comparison is meaningless.
+    """
+
+    def __init__(self, budgets: Mapping[str, float], fallback: float = 1.0) -> None:
+        self.budgets = dict(budgets)
+        self.fallback = fallback
+
+    def select(self, x: str, q: str, task_family: str) -> Selection:
+        return _selection(self.budgets.get(task_family, self.fallback))
+
+
+def tune_global_budget(
+    quality: Array, epsilon: float = 0.05
+) -> float:
+    """B2a: the smallest budget whose *mean* quality stays within epsilon.
+
+    # DECISION: APC-06 §5 says "best fixed budget (validation-tuned)" without
+    # naming the criterion. The population analogue of the monotone-safe b*
+    # (APC-04 §3.2) is used here -- the smallest budget that, together with
+    # every larger budget, keeps mean quality within epsilon of uncompressed.
+    # Tuning the baseline under the same safety rule the method uses keeps
+    # the comparison apples-to-apples, and sweeping epsilon traces the curve
+    # that E3 compares.
+    """
+
+    means = quality.mean(axis=0)
+    safe = means >= means[-1] - epsilon
+    suffix = np.minimum.accumulate(safe[::-1])[::-1]
+    for index in range(len(BUDGETS)):
+        if suffix[index]:
+            return float(BUDGETS[index])
+    return float(BUDGETS[-1])
+
+
+def tune_per_family_budgets(
+    quality: Array, families: Sequence[str], epsilon: float = 0.05
+) -> dict[str, float]:
+    """B2b: :func:`tune_global_budget` applied within each task family."""
+
+    budgets: dict[str, float] = {}
+    for family in sorted(set(families)):
+        mask = np.asarray([name == family for name in families], dtype=bool)
+        if mask.any():
+            budgets[family] = tune_global_budget(quality[mask], epsilon)
+    return budgets
+
+
+class LookupOraclePolicy:
+    """Oracle upper bound: the true b* for each prompt, from held-out labels.
+
+    Labelled an upper bound everywhere it is reported (APC-06 §5). It sees
+    the answer, so it is a headroom measurement, never a competitor.
+    """
+
+    upper_bound = True
+
+    def __init__(self, budget_by_prompt: Mapping[str, float]) -> None:
+        self.budget_by_prompt = dict(budget_by_prompt)
+        self._current: str | None = None
+
+    def for_prompt(self, prompt_id: str) -> LookupOraclePolicy:
+        self._current = prompt_id
+        return self
+
+    def select(self, x: str, q: str, task_family: str) -> Selection:
+        if self._current is None:
+            raise RuntimeError("oracle needs for_prompt() before select()")
+        return _selection(self.budget_by_prompt.get(self._current, 1.0))
+
+
 class OraclePolicy:
     """Oracle upper bound using an injected held-out safe-budget function."""
 
@@ -138,16 +217,30 @@ def all_policies(
     *,
     ours: Policy | None = None,
     oracle_budget: Callable[[str, str, str], float] | None = None,
+    global_budget: float = 0.5,
+    family_budgets: Mapping[str, float] | None = None,
+    family_model_budgets: Mapping[str, float] | None = None,
 ) -> Mapping[str, Policy]:
+    """Every baseline behind the one frozen ``Policy`` interface.
+
+    The tuned budgets are passed in rather than computed here so that tuning
+    always happens on a validation split the caller controls, never on the
+    split the results are reported from.
+    """
+
     if oracle_budget is None:
+
         def oracle_budget(x: str, q: str, family: str) -> float:
             return 1.0
+
     return {
         "B0": FixedBudgetPolicy(1.0),
         **{f"B1@{budget:g}": FixedBudgetPolicy(budget) for budget in BUDGETS},
-        "B2a": FixedBudgetPolicy(0.5),
-        "B2b": FixedBudgetPolicy(0.5),
-        "B2c": FixedBudgetPolicy(0.5),
+        "B2a": FixedBudgetPolicy(global_budget),
+        "B2b": PerFamilyFixedPolicy(family_budgets or {}, global_budget),
+        "B2c": PerFamilyFixedPolicy(
+            family_model_budgets or family_budgets or {}, global_budget
+        ),
         "B3": LengthPolicy(),
         "B3b": GzipRedundancyPolicy(),
         "B4": RandomBudgetPolicy(),
@@ -156,11 +249,18 @@ def all_policies(
         "B5c": ThresholdAdaptivePolicy(),
         "B6": RandomTokenDropPolicy(),
         "B7": ModelRoutingPolicy(),
-        "B8": CachingSensitivityPolicy(0.5),
+        "B8": CachingSensitivityPolicy(global_budget),
         "ORACLE (upper bound)": OraclePolicy(oracle_budget),
         "ORACLE-noisy (upper bound)": NoisyOraclePolicy(oracle_budget),
-        "OURS": ours if ours is not None else FixedBudgetPolicy(0.5),
+        "OURS": ours if ours is not None else FixedBudgetPolicy(global_budget),
     }
 
 
-__all__ = ["RiskControlledPolicy", "all_policies"]
+__all__ = [
+    "LookupOraclePolicy",
+    "PerFamilyFixedPolicy",
+    "RiskControlledPolicy",
+    "all_policies",
+    "tune_global_budget",
+    "tune_per_family_budgets",
+]

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -26,6 +25,7 @@ from frontier.corpus.labels import (
     naive_safe_budget,
     safety_indicator,
 )
+from frontier.corpus.text import PromptText, load_prompt_text
 from frontier.corpus.validate import read_corpus, validate_corpus
 from frontier.features.surface import SurfaceExtractor
 from frontier.harness.prices import PRICE_TABLE_VERSION
@@ -51,12 +51,6 @@ SPLITS = ("D_train", "D_cal_a", "D_cal_b", "D_test")
 DEFAULT_EPSILON = 0.05
 
 
-@dataclass(frozen=True)
-class PromptText:
-    context: str
-    query: str
-
-
 def _git_revision() -> str:
     try:
         return subprocess.run(
@@ -67,23 +61,6 @@ def _git_revision() -> str:
         ).stdout.strip()
     except (subprocess.SubprocessError, OSError):
         return "unknown"
-
-
-def load_prompt_text(instances_dir: Path | None) -> dict[str, PromptText]:
-    """Map prompt id to its context and query from normalised JSONL."""
-
-    texts: dict[str, PromptText] = {}
-    if instances_dir is None or not instances_dir.exists():
-        return texts
-    for path in sorted(instances_dir.rglob("*.jsonl")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            texts[str(record["id"])] = PromptText(
-                str(record["context"]), str(record["query"])
-            )
-    return texts
 
 
 def resolve_splits(corpus: pd.DataFrame, *, seed: int) -> dict[str, set[str]]:
@@ -138,6 +115,7 @@ def _subset(curves: CurveLabels, keep: set[str]) -> tuple[CurveLabels, Array]:
         curves.quality[indices],
         curves.realised_rate[indices],
         curves.output_tokens[indices],
+        curves.input_tokens[indices],
     )
     return subset, cast(Array, indices)
 

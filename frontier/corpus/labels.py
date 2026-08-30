@@ -28,6 +28,7 @@ class CurveLabels:
     quality: Array
     realised_rate: Array
     output_tokens: Array
+    input_tokens: Array
 
     def __len__(self) -> int:
         return len(self.prompt_ids)
@@ -56,6 +57,7 @@ def build_curves(frame: pd.DataFrame) -> CurveLabels:
     quality = _pivot(ordered, "quality", 0.0)
     realised = _pivot(ordered, "realised_r", 1.0)
     outputs = _pivot(ordered, "T_out", 1.0)
+    inputs = _pivot(ordered, "T_in", 1.0)
     prompt_ids = tuple(
         str(value)
         for value in ordered.pivot_table(
@@ -66,7 +68,7 @@ def build_curves(frame: pd.DataFrame) -> CurveLabels:
         ordered.groupby("prompt_id")["family"].first().reindex(list(prompt_ids))
     )
     families = tuple(str(value) for value in family_by_prompt)
-    return CurveLabels(prompt_ids, families, quality, realised, outputs)
+    return CurveLabels(prompt_ids, families, quality, realised, outputs, inputs)
 
 
 def safety_indicator(quality: Array, epsilon: float) -> Array:
