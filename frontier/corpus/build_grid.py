@@ -14,6 +14,7 @@ from threading import Lock
 from frontier.compress.base import Compressor
 from frontier.harness.ledger import GridRow, Ledger, read_ledger
 from frontier.harness.models import TargetLLM
+from frontier.harness.outputs import OutputStore
 from frontier.harness.prices import PRICE_TABLE_VERSION, cost_from_tokens
 from frontier.harness.tasks import Instance, Task
 
@@ -55,8 +56,13 @@ class GridRunner:
         ledger: Ledger,
         completion_index: str | Path,
         failure_index: str | Path | None = None,
+        output_store: OutputStore | None = None,
     ) -> None:
         self.ledger = ledger
+        # The generated text is not in the ledger row (APC-04 §8 stores only
+        # its hash), so answer preservation -- the secondary quality
+        # definition -- is uncomputable unless it is kept here.
+        self.output_store = output_store
         self.completion_index = Path(completion_index)
         self.failure_index = Path(failure_index) if failure_index is not None else None
         self._write_lock = Lock()
@@ -141,6 +147,9 @@ class GridRunner:
                 f"target usage cost does not reconcile: ledger={usd_total} "
                 f"provider={generation.usd}"
             )
+        digest = hashlib.sha256(generation.text.encode()).hexdigest()
+        if self.output_store is not None:
+            self.output_store.put(digest, generation.text)
         return GridRow(
             prompt_id=cell.instance.id,
             task=cell.task.name,
@@ -163,7 +172,7 @@ class GridRunner:
             usd_out=usd_out,
             usd_total=usd_total,
             gpu_seconds=compressed.gpu_ms / 1000.0,
-            raw_output_hash=hashlib.sha256(generation.text.encode()).hexdigest(),
+            raw_output_hash=digest,
             code_version=f"p3;model_revision={cell.target.model_revision}",
             price_table_version=price_table_version,
         )

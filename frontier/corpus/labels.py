@@ -8,6 +8,8 @@ and the output-length curve.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -110,3 +112,49 @@ def naive_safe_budget(quality: Array, epsilon: float) -> Array:
     return cast(
         Array, np.where(has_safe, BUDGETS[indices], float(BUDGETS[-1]))
     )
+
+
+def answer_preservation(
+    frame: pd.DataFrame,
+    outputs: Mapping[str, str],
+    parse: Callable[[str], str],
+    prompt_ids: Sequence[str] | None = None,
+) -> Array:
+    """``rho_ap(x,b) = agreement(y(x,b), y(x,1))`` (APC-04 §3.1.1).
+
+    Fidelity to the *uncompressed system's* behaviour rather than to a gold
+    label.  This is the robustness definition, and it is the one that still
+    carries signal when the target model fails a prompt at every budget:
+    graded accuracy makes those prompts degenerate (every budget is
+    trivially "safe", so ``b*`` collapses), whereas answer preservation still
+    measures whether compression changed the answer.
+
+    The uncompressed answer is taken as the modal parsed output at ``b=1.0``,
+    and ``rho_ap`` is the fraction of samples at each budget reproducing it.
+    """
+
+    ordered = frame.assign(b=frame["requested_b"].round(4))
+    ordered = ordered.assign(
+        parsed=[
+            parse(outputs.get(str(digest), "")) for digest in ordered["raw_output_hash"]
+        ]
+    )
+    ids = (
+        list(prompt_ids)
+        if prompt_ids is not None
+        else sorted(ordered["prompt_id"].astype(str).unique())
+    )
+    result = np.zeros((len(ids), len(BUDGETS)))
+    for row, prompt_id in enumerate(ids):
+        prompt = ordered[ordered["prompt_id"].astype(str) == prompt_id]
+        uncompressed = prompt[prompt["b"] == 1.0]["parsed"].tolist()
+        if not uncompressed:
+            continue
+        reference = Counter(uncompressed).most_common(1)[0][0]
+        for column, budget in enumerate(BUDGETS):
+            answers = prompt[prompt["b"] == round(float(budget), 4)]["parsed"].tolist()
+            if answers:
+                result[row, column] = sum(
+                    answer == reference for answer in answers
+                ) / len(answers)
+    return cast(Array, result)

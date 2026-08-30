@@ -24,6 +24,7 @@ from frontier.corpus.build_grid import GridCell, GridRunner
 from frontier.eval.gate1 import write_gate1_report
 from frontier.harness.ledger import Ledger
 from frontier.harness.models import APIBackend, TargetLLM
+from frontier.harness.outputs import OutputStore
 from frontier.harness.tasks import Instance, Task, default_tasks
 
 RATES = (1.0, 0.8, 0.65, 0.5, 0.4, 0.3, 0.2)
@@ -210,6 +211,9 @@ def main() -> None:
         ledger,
         args.ledger.with_suffix(".completed.jsonl"),
         args.ledger.with_suffix(".failed.jsonl"),
+        # Keeps the raw generations so answer preservation (APC-04 §3.1.1)
+        # can be computed without re-running the grid.
+        OutputStore(args.ledger.with_suffix(".outputs.jsonl")),
     )
 
     cells = [

@@ -17,7 +17,7 @@ selected.
 Verify:
 
 ```bash
-uv run --extra dev pytest        # 119 passed, 5 skipped
+uv run --extra dev pytest        # 134 passed, 5 skipped
 uv run --extra dev ruff check .
 uv run --extra dev mypy frontier scripts tests
 ```
@@ -122,6 +122,20 @@ code subsets if a genuine code-compression result is wanted.
   names `data_files` explicitly. It is scraped assistant output with unclear
   licensing -- check redistribution terms before shipping anything derived
   from it.
+
+## 5b. Model downloads on a throttled connection
+
+Unauthenticated Hugging Face downloads are rate-limited, and large weight
+files are where that bites. Measured here: **0.21 MB/s** on the 3.1 GB
+`Qwen2.5-1.5B-Instruct` weights, with `snapshot_download` stalling outright
+twice. Small files and datasets were unaffected.
+
+Set a token from a free account before pulling anything above ~1 GB:
+
+```bash
+export HF_TOKEN=...        # huggingface.co/settings/tokens
+export HF_HOME=D:/hf-cache # keep weights off a small system drive
+```
 
 ## 6. Gate 1 — the decision that determines the paper
 

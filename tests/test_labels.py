@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -60,3 +62,77 @@ def test_build_curves_averages_samples_per_budget() -> None:
     assert np.allclose(curves.quality, 0.5)
     assert curves.quality.shape == (1, len(BUDGETS))
     assert curves.input_tokens.shape == (1, len(BUDGETS))
+
+
+def test_output_store_round_trips_and_dedupes(tmp_path: Path) -> None:
+    from frontier.harness.outputs import OutputStore
+
+    store = OutputStore(tmp_path / "outputs.jsonl")
+    store.put("aaa", "first text")
+    store.put("aaa", "first text")
+    store.put("bbb", "second text")
+    assert len(store) == 2
+    assert OutputStore(tmp_path / "outputs.jsonl").load() == {
+        "aaa": "first text",
+        "bbb": "second text",
+    }
+
+
+def _ap_frame() -> pd.DataFrame:
+    """p1 answers identically everywhere; p2 drifts as the budget shrinks."""
+    rows = []
+    for budget in BUDGETS:
+        for _sample in range(2):
+            rows.append(
+                {
+                    "prompt_id": "p1",
+                    "requested_b": float(budget),
+                    "raw_output_hash": "same",
+                }
+            )
+            drift = budget <= 0.4
+            rows.append(
+                {
+                    "prompt_id": "p2",
+                    "requested_b": float(budget),
+                    "raw_output_hash": "other" if drift else "base",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_answer_preservation_measures_drift_from_the_uncompressed_answer() -> None:
+    from frontier.corpus.labels import answer_preservation
+
+    outputs = {"same": "42", "base": "7", "other": "9"}
+    values = answer_preservation(
+        _ap_frame(), outputs, lambda text: text.strip(), prompt_ids=("p1", "p2")
+    )
+    # p1 never changes its answer: preserved at every budget.
+    assert np.allclose(values[0], 1.0)
+    # p2 keeps the uncompressed answer down to 0.5, then diverges.
+    assert values[1][list(BUDGETS).index(1.0)] == 1.0
+    assert values[1][list(BUDGETS).index(0.5)] == 1.0
+    assert values[1][list(BUDGETS).index(0.2)] == 0.0
+
+
+def test_answer_preservation_still_scores_prompts_the_model_always_fails() -> None:
+    """The reason this metric exists (APC-04 §3.1.1)."""
+    from frontier.corpus.labels import answer_preservation, monotone_safe_budget
+
+    # Model is wrong everywhere, so graded quality is 0 at every budget and
+    # b* collapses to the smallest budget -- a degenerate label.
+    always_wrong = np.zeros((1, len(BUDGETS)))
+    assert monotone_safe_budget(always_wrong, 0.05)[0] == float(BUDGETS[0])
+
+    # Answer preservation still distinguishes "same wrong answer" from
+    # "different wrong answer", so the prompt keeps carrying signal.
+    frame = _ap_frame()
+    values = answer_preservation(
+        frame,
+        {"same": "wrong", "base": "wrong-a", "other": "wrong-b"},
+        lambda text: text.strip(),
+        prompt_ids=("p2",),
+    )
+    assert values[0][list(BUDGETS).index(0.2)] == 0.0
+    assert values[0][list(BUDGETS).index(1.0)] == 1.0
