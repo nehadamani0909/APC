@@ -153,6 +153,39 @@ def test_ltt_p_value_is_one_when_violations_exceed_the_target() -> None:
     assert hoeffding_bentkus_p_value(0, 100, 0.5) < 0.01
 
 
+def test_ltt_applies_multiplicity_correction_over_the_lambda_grid() -> None:
+    """Holm must be stricter than testing each lambda at delta on its own.
+
+    With 8 candidate thresholds and n=200, the best hypothesis has a
+    Hoeffding p-value of 0.0183. That clears a naive `p <= delta` check at
+    delta=0.1, but not Holm's `delta / m = 0.0125`, so the correct answer is
+    to abstain. Without this the procedure controls nothing -- it is the
+    classic multiple-comparisons error.
+    """
+
+    n = 200
+    predicted = np.tile(np.linspace(0.2, 1.0, len(BUDGETS)), (n, 1))
+    cost = np.tile(np.arange(len(BUDGETS), dtype=float), (n, 1))
+    truth = np.tile(np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]), (n, 1))
+
+    candidates = sorted({0.0, 1.0, *predicted.ravel().tolist()})
+    best_p = hoeffding_bentkus_p_value(0, n, 0.1)
+    assert 0.1 / len(candidates) < best_p <= 0.1, best_p
+
+    # The naive rule would accept the very cheapest threshold here.
+    assert calibrate_ltt(predicted, cost, truth, tau=0.5, delta=0.1) == 1.0
+
+    # With enough data the same hypothesis does survive correction.
+    big = 400
+    assert calibrate_ltt(
+        np.tile(np.linspace(0.2, 1.0, len(BUDGETS)), (big, 1)),
+        np.tile(np.arange(len(BUDGETS), dtype=float), (big, 1)),
+        np.tile(np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]), (big, 1)),
+        tau=0.5,
+        delta=0.1,
+    ) == 0.0
+
+
 def test_ltt_controls_the_tail_and_abstains_when_nothing_is_admissible() -> None:
     n = 200
     predicted = np.tile(np.linspace(0.2, 1.0, len(BUDGETS)), (n, 1))

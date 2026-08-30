@@ -84,7 +84,16 @@ def _labels(frame: pd.DataFrame, epsilon: float) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
-def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float:
+def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float | None:
+    """Split-half estimate of the sampling-noise variance in ``b*``.
+
+    Returns ``None`` when it cannot be estimated -- fewer than two sample
+    indices, or budgets missing from a half.  Returning 0.0 there would be
+    read as "there is no noise", and the gate would then compare the observed
+    variance against a threshold of zero and look decisive when nothing was
+    measured.  The gate is the project's go/no-go; it must not silently
+    degrade.
+    """
     values: list[float] = []
     rng = random.Random(0)
     for prompt_id, prompt_frame in frame.groupby("prompt_id"):
@@ -108,7 +117,7 @@ def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float:
                 )
             if len(halves) == 2:
                 values.append((halves[0] - halves[1]) ** 2 / 2.0)
-    return float(pd.Series(values).mean()) if values else 0.0
+    return float(pd.Series(values).mean()) if values else None
 
 
 def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None:
@@ -119,15 +128,16 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
         "",
         f"Rows: {len(frame)}",
         "",
-        "> Provenance: this run uses the deterministic offline pilot target and "
-        "> fixture-style prompts to validate the P3 harness path. Its PASS/FAIL "
-        "> result is not evidence about a real target model; rerun with the pinned "
-        "> local model before making the project go/no-go decision.",
+        "> **Provenance.** Gate 1 is the project's go/no-go (APC-05 §2).",
+        "> A PASS or FAIL here is only evidence about the target model,",
+        "> compressor, and prompts that actually produced this ledger.",
+        "> Check the corpus provenance before treating it as the decision.",
         "",
     ]
     report.append("## Gate test")
     report.append("")
     passed_all = True
+    any_inconclusive = False
     for epsilon, labels in labels_by_epsilon.items():
         report.append(f"### ε = {epsilon:.2f}")
         report.append("")
@@ -135,6 +145,18 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
             values = family_labels["b_star"].tolist()
             variance, ci_low, ci_high = _bootstrap_variance(values)
             noise = _noise_floor(frame[frame["family"] == family], epsilon)
+            if noise is None:
+                # Not a FAIL: a FAIL is a scientific claim that the
+                # heterogeneity is within noise. This is "the test did not
+                # run", which must never be reported as a verdict.
+                any_inconclusive = True
+                report.append(
+                    f"- {family}: Var[b*]={variance:.6f}; bootstrap CI="
+                    f"[{ci_low:.6f}, {ci_high:.6f}]; σ²_noise=**not estimable** "
+                    f"(needs k>=2 samples per prompt at every budget); "
+                    f"**INCONCLUSIVE**"
+                )
+                continue
             passed = ci_low > 2.0 * noise
             passed_all = passed_all and passed
             report.append(
@@ -151,11 +173,32 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
             f"(95% bootstrap CI [{gap_low:.4f}, {gap_high:.4f}])"
         )
         report.append("")
-    report.append(f"## Overall Gate 1 result: **{'PASS' if passed_all else 'FAIL'}**")
+    if any_inconclusive:
+        verdict = "INCONCLUSIVE"
+        note = (
+            "At least one family could not have its noise floor estimated, so "
+            "the gate did not run there. This is not a FAIL: a FAIL asserts "
+            "that heterogeneity is within sampling noise, which was not "
+            "measured. Re-run with k>=2 samples per prompt at every budget."
+        )
+    elif passed_all:
+        verdict = "PASS"
+        note = "Within-family Var[b*] exceeds twice the sampling-noise floor."
+    else:
+        verdict = "FAIL"
+        note = (
+            "Within-family Var[b*] does not exceed the noise floor. APC-05 §8 "
+            "pre-commits to the C5 corpus/negative-result paper on this "
+            "outcome; do not proceed on a borderline result."
+        )
+    report.append(f"## Overall Gate 1 result: **{verdict}**")
+    report.append("")
+    report.append(note)
     report.append("")
     report.append("## E1c rate adherence")
     report.append("")
-    for key, group in frame.groupby(["family", "backend", "requested_b"]):
+    grouped = frame.assign(requested_b=frame["requested_b"].round(4))
+    for key, group in grouped.groupby(["family", "backend", "requested_b"]):
         mean, low, high = _mean_ci(group["realised_r"].tolist())
         report.append(
             f"- {key}: mean realised rate={mean:.4f} "
@@ -170,6 +213,7 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
         lambda row: float(row["T_out"]) / float(baseline[str(row["prompt_id"])] or 1.0),
         axis=1,
     )
+    expanded["requested_b"] = expanded["requested_b"].round(4)
     for key, group in expanded.groupby(["family", "requested_b"]):
         mean, low, high = _mean_ci(group["expansion"].tolist())
         report.append(
