@@ -120,8 +120,60 @@ def _noise_floor(frame: pd.DataFrame, epsilon: float) -> float | None:
     return float(pd.Series(values).mean()) if values else None
 
 
+def check_validity(frame: pd.DataFrame) -> list[str]:
+    """Preconditions the gate needs before its verdict means anything.
+
+    Gate 1 asks whether compression tolerance varies across instances. Two
+    situations make that unanswerable no matter how much data is collected,
+    and both look like an ordinary FAIL if they are not checked:
+
+    1. A prompt the model already fails uncompressed has no compression
+       tolerance to measure. ``rho(x,1) = 0`` makes every budget satisfy
+       ``rho(b) >= 0 - epsilon``, so ``b*`` collapses to the smallest budget
+       for a reason that has nothing to do with compression.
+    2. If compression appears to *improve* aggregate quality, the signal is
+       below the noise floor -- removing context cannot systematically help.
+
+    APC-05 §8 pre-commits the project to abandoning the method paper on a
+    FAIL, so reporting one from an uninterpretable measurement is the most
+    expensive mistake this module can make.
+    """
+
+    problems: list[str] = []
+    quality = frame.assign(b=frame["requested_b"].round(4)).pivot_table(
+        index="prompt_id", columns="b", values="quality", aggfunc="mean"
+    )
+    if 1.0 not in quality.columns:
+        return ["no uncompressed (b=1.0) rows: rho(x,1) is undefined"]
+    baseline = quality[1.0]
+    unsolvable = int((baseline <= 0.0).sum())
+    if unsolvable:
+        share = unsolvable / len(baseline)
+        problems.append(
+            f"{unsolvable}/{len(baseline)} prompts ({share:.0%}) have "
+            "rho(x,1) = 0: the target model never solves them uncompressed, "
+            "so their b* is degenerate (every budget is trivially 'safe')"
+        )
+    solvable = int((baseline > 0.0).sum())
+    if solvable < 10:
+        problems.append(
+            f"only {solvable} prompts are solvable uncompressed; too few to "
+            "estimate within-family Var[b*]"
+        )
+    means = quality.mean()
+    best_budget = float(means.idxmax())
+    if best_budget < 1.0 and means.max() - means[1.0] > 0.02:
+        problems.append(
+            f"mean quality peaks at b={best_budget:g} ({means.max():.3f}), "
+            f"above uncompressed ({means[1.0]:.3f}): compression cannot "
+            "systematically improve accuracy, so the curves are noise-dominated"
+        )
+    return problems
+
+
 def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None:
     frame = pd.read_json(ledger_path, lines=True)
+    validity = check_validity(frame)
     labels_by_epsilon = {epsilon: _labels(frame, epsilon) for epsilon in EPSILONS}
     report = [
         "# Gate 1 report",
@@ -134,6 +186,19 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
         "> Check the corpus provenance before treating it as the decision.",
         "",
     ]
+    if validity:
+        report += [
+            "## ⚠ Validity preconditions NOT met",
+            "",
+            "The gate's verdict is **not interpretable** on this data:",
+            "",
+            *[f"- {problem}" for problem in validity],
+            "",
+            "Everything below is reported for diagnosis only. Do not act on",
+            "it, and in particular do not treat it as the APC-05 §8 FAIL that",
+            "pre-commits the project to the corpus/negative-result paper.",
+            "",
+        ]
     report.append("## Gate test")
     report.append("")
     passed_all = True
@@ -173,7 +238,14 @@ def write_gate1_report(ledger_path: str | Path, report_path: str | Path) -> None
             f"(95% bootstrap CI [{gap_low:.4f}, {gap_high:.4f}])"
         )
         report.append("")
-    if any_inconclusive:
+    if validity:
+        verdict = "INCONCLUSIVE (validity preconditions not met)"
+        note = (
+            "The target model, not the compression, is the limiting factor "
+            "here. Re-run with a model that solves the task uncompressed "
+            "before reading any verdict from this gate."
+        )
+    elif any_inconclusive:
         verdict = "INCONCLUSIVE"
         note = (
             "At least one family could not have its noise floor estimated, so "

@@ -128,8 +128,9 @@ def test_from_artifact_rejects_a_foreign_file(tmp_path: Path) -> None:
 
 
 def _ledger_frame(samples: int) -> pd.DataFrame:
+    # >= 10 prompts, or the validity precondition on sample size fires.
     rows = []
-    for prompt in range(6):
+    for prompt in range(12):
         for budget in BUDGETS:
             for sample in range(samples):
                 rows.append(
@@ -175,3 +176,65 @@ def test_gate1_reaches_a_verdict_when_the_floor_is_estimable(tmp_path: Path) -> 
     assert "INCONCLUSIVE" not in text
     assert "σ²_noise=" in text
     assert ("**PASS**" in text) or ("**FAIL**" in text)
+
+
+def _quality_ledger(baseline: list[float], curve: list[float]) -> pd.DataFrame:
+    """One row per (prompt, budget, sample) with a controlled quality curve."""
+    rows = []
+    for prompt, base in enumerate(baseline):
+        for index, budget in enumerate(BUDGETS):
+            value = base if budget == 1.0 else curve[index]
+            for sample in range(4):
+                rows.append(
+                    {
+                        "prompt_id": f"p{prompt}",
+                        "family": "reason",
+                        "backend": "truncate_tail",
+                        "requested_b": float(budget),
+                        "realised_r": float(budget),
+                        "quality": value,
+                        "T_out": 100.0,
+                        "sample_idx": sample,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_validity_flags_prompts_the_model_cannot_solve() -> None:
+    from frontier.eval.gate1 import check_validity
+
+    # rho(x,1) = 0 makes every budget trivially "safe", so b* collapses to
+    # the smallest budget for reasons unrelated to compression.
+    frame = _quality_ledger([0.0] * 12, [0.0] * 7)
+    problems = check_validity(frame)
+    assert any("rho(x,1) = 0" in p for p in problems)
+
+
+def test_validity_flags_compression_appearing_to_help() -> None:
+    from frontier.eval.gate1 import check_validity
+
+    # Removing context cannot systematically raise accuracy; if it looks
+    # like it does, the curves are noise.
+    frame = _quality_ledger([0.3] * 12, [0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.3])
+    assert any("noise-dominated" in p for p in check_validity(frame))
+
+
+def test_validity_passes_on_a_coherent_degradation_curve() -> None:
+    from frontier.eval.gate1 import check_validity
+
+    frame = _quality_ledger([1.0] * 12, [0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.0])
+    assert check_validity(frame) == []
+
+
+def test_gate1_refuses_a_verdict_when_preconditions_fail(tmp_path: Path) -> None:
+    ledger = tmp_path / "floored.jsonl"
+    _quality_ledger([0.0] * 12, [0.0] * 7).to_json(
+        ledger, orient="records", lines=True
+    )
+    report = tmp_path / "gate1.md"
+    write_gate1_report(ledger, report)
+    text = report.read_text(encoding="utf-8")
+    assert "Validity preconditions NOT met" in text
+    # Must never emit the FAIL that pre-commits the project to a pivot.
+    assert "Overall Gate 1 result: **FAIL**" not in text
+    assert "INCONCLUSIVE" in text
