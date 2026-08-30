@@ -127,8 +127,18 @@ class GSM8KTask(JsonlTask):
 
 
 class LongBenchTask(JsonlTask):
-    def __init__(self, subset: str, source: str | Path | None = None) -> None:
-        super().__init__(subset, "multidoc_qa", source=source, metric_fn=token_f1)
+    def __init__(
+        self,
+        subset: str,
+        source: str | Path | None = None,
+        family: Family | None = None,
+    ) -> None:
+        super().__init__(
+            subset,
+            family or LONGBENCH_FAMILIES.get(subset, "multidoc_qa"),
+            source=source,
+            metric_fn=token_f1,
+        )
 
 
 class MeetingBankTask(JsonlTask):
@@ -159,6 +169,18 @@ LONGBENCH_SUBSETS = (
     "code",
     "synthetic",
 )
+
+# The six LongBench sub-families do not all map onto distinct ``Family``
+# labels, so the sub-family itself is carried in each instance's
+# ``meta["subfamily"]`` for the E6b leave-one-family-out split.
+LONGBENCH_FAMILIES: dict[str, Family] = {
+    "multidoc_qa": "multidoc_qa",
+    "single_doc_qa": "qa",
+    "summarisation": "summ",
+    "few_shot": "qa",
+    "code": "code",
+    "synthetic": "qa",
+}
 
 
 def default_tasks(source_dir: str | Path | None = None) -> list[Task]:
