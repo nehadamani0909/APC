@@ -52,3 +52,35 @@ def test_split_leakage_is_rejected() -> None:
 def test_api_spend_cap_is_enforced() -> None:
     with pytest.raises(ValueError, match="spend cap exceeded"):
         validate_corpus(_frame(), api_spend_cap_usd=-0.01)
+
+
+def test_stratified_subset_is_family_balanced_and_paired() -> None:
+    from frontier.corpus.build_full import stratified_subset
+
+    prompt_ids = [f"p{i}" for i in range(40)]
+    families = ["qa" if i % 2 else "code" for i in range(40)]
+    chosen = stratified_subset(prompt_ids, families, 10, seed=0)
+    assert len(chosen) == 10
+    # Tiers B/C must sample the SAME prompts as tier A, or cross-model
+    # comparison stops being paired.
+    assert set(chosen).issubset(set(prompt_ids))
+    picked = {pid: fam for pid, fam in zip(prompt_ids, families, strict=True)}
+    counts = {"qa": 0, "code": 0}
+    for pid in chosen:
+        counts[picked[pid]] += 1
+    assert counts["qa"] == counts["code"] == 5
+    # Deterministic for a fixed seed.
+    assert stratified_subset(prompt_ids, families, 10, seed=0) == chosen
+
+
+def test_attach_metadata_accepts_real_lookups() -> None:
+    frame = _frame()
+    attached = attach_metadata(
+        frame,
+        source_document={"p1": "doc-7"},
+        split={"p1": "D_test"},
+        tier="B",
+    )
+    assert attached["source_document_id"].tolist() == ["doc-7"]
+    assert attached["split"].tolist() == ["D_test"]
+    assert attached["tier"].tolist() == ["B"]
