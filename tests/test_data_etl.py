@@ -198,3 +198,31 @@ def test_real_download_normalises_and_splits_cleanly(
             assert seen.setdefault(row["id"], partition) == partition
             assert seen.setdefault(f"doc:{document}", partition) == partition
     assert any(paths[name].stat().st_size > 0 for name in ("D_train", "D_test"))
+
+
+def test_gsm8k_questions_are_separate_documents() -> None:
+    instances = normalize_gsm8k(GSM8K_ROWS)
+    documents = {str(row.meta["source_document_id"]) for row in instances}
+    # Every instance shares the same few-shot prefix. Hashing that prefix made
+    # them one document group, which collapsed all four splits into one.
+    assert len(documents) == len(instances)
+    # The pool is still recorded, for provenance.
+    assert len({str(row.meta["few_shot_pool_id"]) for row in instances}) == 1
+
+
+def test_gsm8k_splits_are_all_populated() -> None:
+    splits = assign_splits(normalize_gsm8k(GSM8K_ROWS * 20), seed=0)
+    assert all(rows for rows in splits.values()), {
+        name: len(rows) for name, rows in splits.items()
+    }
+
+
+def test_collapsed_document_grouping_is_rejected() -> None:
+    instances = normalize_gsm8k(GSM8K_ROWS)
+    collapsed = [
+        type(row)(row.id, row.context, row.query, row.gold,
+                  {**row.meta, "source_document_id": "one-and-only"})
+        for row in instances
+    ]
+    with pytest.raises(ValueError, match="empty splits"):
+        assign_splits(collapsed, seed=0)

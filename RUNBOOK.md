@@ -81,7 +81,24 @@ LongBench sub-family names (`multidoc_qa`, `summarisation`, …) are accepted as
 aliases for their first config; pass a real config name (`hotpotqa`,
 `gov_report`, `lcc`, …) to select one exactly.
 
+**LongBench is distributed as a loading script**, so its specs set
+`trust_remote_code=True` and `datasets` will execute that script. This is
+opt-in per dataset rather than global, so it never silently applies to the
+others. On Windows you will also see a `huggingface_hub` symlink warning
+unless Developer Mode is on; it is harmless, and only costs disk space.
+
 Datasets and weights are gitignored and must never be committed.
+
+### Verified against live data
+
+| Family | Instances | Context length (words) | Splits |
+|---|---|---|---|
+| `gsm8k` | 200 | 737 (8-shot block, constant) | 120 / 20 / 20 / 40 |
+| `hotpotqa` | 120 | min 1,258 · median 10,260 · max 12,680 | 72 / 12 / 12 / 24 |
+
+Both check out: exact 60/10/10/20 ratios, no prompt id or source document
+crossing a split, no evaluated question appearing inside its own context, and
+GSM8K golds parsing to numerics.
 
 ## 6. Gate 1 — the decision that determines the paper
 
@@ -91,9 +108,22 @@ you are writing the method paper (C1+C2) or the C5 corpus paper.
 
 **Without a GPU**, run it on `gpt-4o-mini` rather than a local model:
 
-- ≈7,000 calls, long inputs and short outputs
-- ≈34M input + ≈1M output tokens ⇒ **roughly $5–6**, under $3 on short families
-- set a spend cap well below your tolerance and let it abort rather than trusting an estimate
+≈7,000 calls, long inputs and short outputs. Estimated from **measured**
+context lengths (above), 50 prompts per family, and the mean realised rate
+across the seven budgets (≈0.55):
+
+| Family | ≈ tokens/call | Calls | ≈ input tokens |
+|---|---:|---:|---:|
+| gsm8k | 700 | 1,750 | 1.2M |
+| hotpotqa | 7,150 | 1,750 | 12.5M |
+| meetingbank | 4,400 | 1,750 | 7.7M |
+| sharegpt | 1,100 | 1,750 | 1.9M |
+| **total** | | **7,000** | **≈23M** |
+
+At `gpt-4o-mini` rates: ≈23M input ⇒ **$3.50**, plus ≈1M output ⇒ **$0.63**.
+**Roughly $4–6.** Set the cap at $10 and let it abort rather than trusting the
+estimate — long-context families dominate, so a mis-sized MeetingBank pull
+moves the total more than anything else.
 
 `# DECISION:` APC-04 §3.1.1 specifies k=5 on a *local* model and k=1 at T=0 on
 API models, because API cost was the constraint. At $6 that reasoning does not

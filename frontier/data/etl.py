@@ -41,6 +41,11 @@ class DatasetSpec:
     normalize: Normalizer
     config: str | None = None
     split: str = "test"
+    # Some hubs datasets ship a Python loading script that `datasets` will
+    # only execute with explicit consent. Opt in per dataset rather than
+    # globally, so enabling it for one benchmark never silently enables
+    # arbitrary code execution for the others.
+    trust_remote_code: bool = False
 
 
 def _document_id(text: str) -> str:
@@ -97,21 +102,27 @@ def normalize_gsm8k(records: Sequence[Record]) -> list[Instance]:
         f"Question: {_text(row, 'question')}\nAnswer: {_text(row, 'answer')}"
         for row in pool
     )
-    context_id = _document_id(exemplars)
+    pool_id = _document_id(exemplars)
     instances: list[Instance] = []
     for index, record in enumerate(records[GSM8K_SHOTS:]):
         answer = _text(record, "answer")
+        prompt_id = f"gsm8k-{index}"
         instances.append(
             _instance(
-                prompt_id=f"gsm8k-{index}",
+                prompt_id=prompt_id,
                 context=exemplars,
                 query=_text(record, "question"),
                 # The graded answer is the final numeric value after '####'.
                 gold=answer.split("####")[-1].strip(),
                 family="reason",
                 source="openai/gsm8k",
-                source_document_id=context_id,
-                extra={"full_solution": answer},
+                # Each question is its own document. The exemplar block is a
+                # constant prefix shared by every instance, NOT a reused
+                # document: hashing it would put all instances in one group
+                # and collapse the four splits into one. The pool cannot leak
+                # because its questions are held out of the emitted set above.
+                source_document_id=prompt_id,
+                extra={"full_solution": answer, "few_shot_pool_id": pool_id},
             )
         )
     return instances
@@ -299,6 +310,8 @@ def _build_specs() -> dict[str, DatasetSpec]:
                 _longbench_normalizer(config, family),
                 config,
                 "test",
+                # LongBench is distributed as a loading script.
+                trust_remote_code=True,
             )
         # The sub-family name is an alias for its first config, so the
         # APC-05 family names stay usable on the command line.
@@ -322,11 +335,18 @@ def load_huggingface(
         from datasets import load_dataset
     except ImportError as exc:
         raise RuntimeError("install the 'real' extra to use Hugging Face ETL") from exc
+    options: dict[str, Any] = {}
+    if spec.trust_remote_code:
+        # Only forwarded when the spec asks for it: newer `datasets` releases
+        # reject the keyword outright, and passing it by default would make
+        # every loader depend on a version-specific argument.
+        options["trust_remote_code"] = True
     dataset = load_dataset(
         spec.path,
         name=spec.config,
         split=split or spec.split,
         cache_dir=str(cache_dir) if cache_dir is not None else None,
+        **options,
     )
     records = [cast(Record, row) for row in dataset]
     instances = spec.normalize(records)
@@ -334,7 +354,7 @@ def load_huggingface(
 
 
 def assign_splits(
-    instances: list[Instance], *, seed: int = 0
+    instances: list[Instance], *, seed: int = 0, require_all_splits: bool = True
 ) -> dict[str, list[Instance]]:
     """Deterministic 60/10/10/20 partition without source-document leakage."""
 
@@ -349,6 +369,20 @@ def assign_splits(
     for name, ids in split_ids.items():
         for document_id in sorted(ids):
             result[name].extend(groups[document_id])
+    if require_all_splits:
+        empty = sorted(name for name, rows in result.items() if not rows)
+        if empty:
+            # A normaliser that derives source_document_id from something
+            # constant across the dataset -- a shared few-shot prefix, say --
+            # yields one group and silently collapses all four splits into
+            # one. Empty D_train makes training impossible and empty D_cal_b
+            # makes the CRC guarantee uncalibratable, so fail loudly.
+            raise ValueError(
+                f"empty splits {empty}: {len(instances)} instances fell into "
+                f"{len(groups)} source-document group(s). At least 4 distinct "
+                "source_document_id values are required; check whether the "
+                "normaliser is grouping on a constant."
+            )
     return result
 
 
