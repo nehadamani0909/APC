@@ -1,7 +1,12 @@
-"""Rebuild all release reports from the committed corpus."""
+"""Rebuild the release reports from the committed corpus.
+
+Scaffold output goes to ``reports/scaffold`` and is deliberately NOT copied
+into ``paper/``: those numbers are placeholders, and a real BCa interval
+around a placeholder reads exactly like a result.  ``paper/`` is populated
+only from a real corpus and a trained predictor.
+"""
 
 import argparse
-import shutil
 from importlib import import_module
 from pathlib import Path
 
@@ -19,28 +24,26 @@ def main() -> None:
     validate_corpus(corpus)
     write_stats_report(corpus, "reports/corpus_stats.md")
     train_module = import_module("scripts.06_train")
-    train_module.train_from_corpus(corpus_path, Path("artifacts/predictor.json"))
+    train_module.train_from_corpus(
+        corpus_path,
+        Path("artifacts/predictor.json"),
+        instances_dir=Path("data/raw"),
+        report_path=Path("reports/e2_e4.md"),
+    )
     eval_run(corpus_path)
     paper_figures = import_module("scripts.09_paper_figures")
     paper_figures.main()
     generate_reports()
-    figures = Path("paper/figures")
-    tables = Path("paper/tables")
-    figures.mkdir(parents=True, exist_ok=True)
-    tables.mkdir(parents=True, exist_ok=True)
-    for source in Path("reports").glob("f*.svg"):
-        shutil.copy2(source, figures / source.name)
-    for source in (
-        Path("reports") / "t3.md",
-        Path("reports") / "tables_p9.md",
-        *sorted(Path("reports").glob("t[4-9].md")),
-    ):
-        shutil.copy2(source, tables / source.name)
+    Path("paper/figures").mkdir(parents=True, exist_ok=True)
+    Path("paper/tables").mkdir(parents=True, exist_ok=True)
+    print(
+        "Pipeline stages ran against the committed fixture corpus.\n"
+        "Scaffold tables and figures are in reports/scaffold and are NOT "
+        "results; paper/ is left empty until a real corpus and a trained "
+        "predictor exist."
+    )
     if args.fast:
-        print(
-            "fast mode: reused the committed deterministic corpus and all "
-            "pipeline stages"
-        )
+        print("fast mode: reused the committed deterministic corpus")
 
 
 if __name__ == "__main__":
