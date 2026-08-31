@@ -42,9 +42,11 @@ from three task families and seven compression budgets, plus a separate
 Three results follow. First, the realised compression rate is consistently
 below the requested one when measured in the target model's tokenizer, with a
 signed error between $-0.025$ and $-0.053$ whose bootstrap confidence
-intervals all exclude zero; the error varies non-monotonically with the
+intervals all exclude zero. The error varies non-monotonically with the
 requested budget and differs by a factor of about three across task families,
-so it is not correctable by a single scalar offset. Second, compression
+so a single scalar offset does not remove it; a calibration table indexed by
+budget and family removes 79.5\% of it on held-out instances, which also
+bounds what a per-instance model could add. Second, compression
 increases output length on two of three families, but the increase does not
 change the cost-optimal budget: across all 25 evaluable instances and output
 price ratios from 1 to 5, the cheapest safe budget was always the smallest
@@ -97,7 +99,9 @@ Our contributions are measurements rather than a method:
 \item A characterisation of LLMLingua-2 rate adherence in the target
 tokenizer, over 1{,}044 measurements and 174 instances, showing a consistent
 negative signed error with a non-monotonic dependence on the requested budget
-and a factor-of-three spread across task families.
+and a factor-of-three spread across task families. We then measure, on
+held-out instances, how much of that error a calibration table removes, which
+bounds the headroom left for any per-instance corrector.
 \item A test of whether compression-induced output expansion changes the
 cost-optimal budget. Expansion is present, but the optimum does not move in
 any of the 25 evaluable instances at output price ratios from 1 to 5. We
@@ -394,11 +398,55 @@ on 2WikiMQA, $-0.060$ on MultiFieldQA and $-0.025$ on GSM8K. The dependence on
 input text, and not only on the requested budget, is what would make a learned
 per-instance correction the appropriate object rather than a lookup table.
 
-In absolute terms these errors are modest: at most about 5 percentage points
-of the original prompt. They matter because they are systematic and
-directional, not because any single instance is badly served. A saving
-reported as $1-b$ overstates the compression achieved in every condition we
-measured.
+The errors are modest in absolute terms, at most about 5 percentage points of
+the original prompt, and their direction matters. Because $r < b$ the
+compressor removes \emph{more} text than asked, so the realised saving
+exceeds the requested one: at $b=0.65$ the request implies a 35\% reduction
+and the measurement gives 40.3\%. The discrepancy therefore favours the user
+on cost, and its consequence lies in quality instead. A user who selects $b$
+to stay inside a quality tolerance is served at the more aggressive point $r$,
+so the delivered quality corresponds to a budget they did not choose, and the
+effect is largest near $b=0.65$ where quality-safe operating points tend to
+sit. It also breaks comparability: two systems reporting a nominal rate of 0.5
+may be operating at different realised rates.
+
+\subsection{How much of the bias is correctable}
+
+\begin{table}[t]
+\caption{Held-out mean $|r - \text{target}|$ after fitting a signed offset on
+a disjoint half of the instances, over 200 random splits. Brackets are 2.5th
+and 97.5th percentiles across splits.}
+\label{tab:correction}
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+Offset fitted on & error & 95\% interval & removed \\
+\midrule
+nothing & 0.0408 & $[0.0380, 0.0435]$ & n/a \\
+budget & 0.0185 & $[0.0173, 0.0196]$ & 54.7\% \\
+budget $\times$ family & 0.0084 & $[0.0069, 0.0096]$ & 79.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A systematic error is only useful if it can be removed. Instances are split in
+half at random, a mean signed offset is fitted on one half either per budget or
+per budget and family, and the residual $|r - \text{target}|$ is measured on
+the held-out half. Table \ref{tab:correction} reports 200 such splits.
+
+A per-budget offset table, which needs no model and no per-instance
+computation, removes 54.7\% of the error on unseen instances. Conditioning it
+on the task family removes 79.5\%, cutting the residual by a further 55\%.
+That is held-out evidence for the family dependence in Fig.
+\ref{fig:adherence}: family identity carries information the requested budget
+does not.
+
+The residual after per-family correction is 0.0084, which bounds from above
+what any per-instance adherence model could contribute. A two-column
+calibration table thus recovers most of the achievable correction, and a
+learned per-instance corrector has at most 0.008 of rate error left to work
+with on this compressor.
 
 \subsection{Output expansion and the cost optimum}
 
@@ -517,8 +565,11 @@ The three results differ in how much weight they can carry.
 
 Rate adherence is well powered and consistent, resting on 1{,}044 measurements
 with no target-model calls, and every interval excludes zero. Its practical
-consequence is narrow but concrete: the requested rate is a request, and
-reported savings computed from it are biased in a known direction.
+consequence is cheap to act on: a user targeting a quality-safe budget is
+served below it, and a two-column calibration table removes about four fifths
+of the discrepancy with no per-instance computation. The same measurement
+bounds the more elaborate alternative, since only 0.008 of rate error survives
+that table.
 
 The cost result is a conditional negative. Expansion exists and is significant
 in the mean, but it does not move the optimum for this workload, and the
@@ -537,20 +588,13 @@ four.
 
 \subsection{The experiment that would settle the open question}
 
-The power analysis specifies its own follow-up. Holding the instance count at
+The power analysis specifies its own follow-up: holding the instance count at
 ten and raising the sample count to $k=20$ on MultiFieldQA gives 1{,}400
-cells, which at the 7\,s per cell measured here is about three hours on the
-same hardware. That design keeps every other factor fixed and moves only the
-quantity our analysis identifies as binding.
-
-Either outcome is informative. If the between-instance variance then exceeds
-twice the recomputed floor, per-instance heterogeneity is established for this
-family and per-instance rate selection has a measured basis. If it does not,
-the result is a well-powered negative: compression tolerance on this task and
-model would be close enough to uniform that a per-family fixed budget is the
-appropriate policy, and the predictor machinery that motivated this line of
-work would not be worth building. The present study cannot distinguish these
-cases, which is the honest summary of its heterogeneity result.
+cells, about three hours at the 7\,s per cell measured here. Either outcome is
+informative. If the between-instance variance then exceeds twice the
+recomputed floor, per-instance rate selection has a measured basis; if it does
+not, the result is a well-powered negative and a per-family fixed budget is
+the appropriate policy. The present study cannot distinguish these cases.
 
 \section{Limitations}
 
@@ -607,8 +651,12 @@ buy are hypotheses.
 We measured what a requested compression rate delivers. For LLMLingua-2 on a
 3B target model, the realised rate is consistently below the requested rate,
 by an amount that varies non-monotonically with the budget and by a factor of
-about three across task families; savings quoted from the requested rate are
-therefore optimistic in a systematic way. Compression lengthens output on two
+about three across task families. The compressor is more aggressive than
+asked, so the realised saving exceeds the requested one while the delivered
+quality corresponds to a budget the user did not select. A calibration table
+indexed by budget and family removes 79.5\% of the discrepancy on held-out
+instances, leaving 0.008 of rate error as the ceiling on what a per-instance
+model could recover. Compression lengthens output on two
 of three families, significantly so in the mean, but the increase never
 changed the cost-optimal budget in our data, because input reduction dominates
 output growth by about two orders of magnitude in short-answer tasks. The

@@ -180,10 +180,57 @@ def sensitivity_table() -> dict:
     return out
 
 
+def correction_table(reps: int = 200) -> dict:
+    """How much of the adherence error is removable by a fixed offset?
+
+    Split instances in half, fit a mean signed offset per budget (and per
+    family) on one half, and measure the residual |realised - target| on the
+    other. This separates the systematic part of the error, which a
+    calibration table removes, from the per-instance part, which it cannot.
+    The gap between the global and per-family rows is the value of knowing
+    which task the prompt came from.
+    """
+    rng = np.random.default_rng(0)
+    pids = adh["prompt_id"].unique()
+    rows = {"none": [], "global": [], "family": []}
+    for _ in range(reps):
+        perm = rng.permutation(pids)
+        half = len(perm) // 2
+        tr, te = set(perm[:half]), set(perm[half:])
+        a, b = adh[adh["prompt_id"].isin(tr)], adh[adh["prompt_id"].isin(te)]
+        dg = a.groupby("requested_b")["signed_error"].mean()
+        df = a.groupby(["family", "requested_b"])["signed_error"].mean()
+        rows["none"].append(b["signed_error"].abs().mean())
+        rows["global"].append(
+            (b["signed_error"] - b["requested_b"].map(dg)).abs().mean()
+        )
+        idx = b.set_index(["family", "requested_b"]).index.map(df)
+        rows["family"].append(np.abs(b["signed_error"].values - idx.values).mean())
+    out = {}
+    for k, v in rows.items():
+        v = np.asarray(v)
+        out[k] = {
+            "mean_abs_error": float(v.mean()),
+            "ci": [float(np.quantile(v, .025)), float(np.quantile(v, .975))],
+        }
+    base = out["none"]["mean_abs_error"]
+    for k in ("global", "family"):
+        out[k]["pct_removed"] = 100 * (base - out[k]["mean_abs_error"]) / base
+    return out
+
+
 if __name__ == "__main__":
     fig_adherence()
     fig_frontiers()
     fig_expansion()
+    corr = correction_table()
+    (Path(__file__).resolve().parent / "correction.json").write_text(
+        json.dumps(corr, indent=2), encoding="utf-8"
+    )
+    for k, v in corr.items():
+        pct = f" ({v['pct_removed']:.1f}% removed)" if "pct_removed" in v else ""
+        print(f"correction/{k:7s} {v['mean_abs_error']:.4f} "
+              f"[{v['ci'][0]:.4f}, {v['ci'][1]:.4f}]{pct}")
     stats = sensitivity_table()
     (Path(__file__).resolve().parent / "sensitivity.json").write_text(
         json.dumps(stats, indent=2), encoding="utf-8"

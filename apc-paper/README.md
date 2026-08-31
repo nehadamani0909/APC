@@ -45,7 +45,8 @@ uv run python apc-paper/make_figures.py
 ```
 
 This writes `figures/fig_adherence.pdf`, `figures/fig_frontiers.pdf`,
-`figures/fig_expansion.pdf` and `sensitivity.json`.
+`figures/fig_expansion.pdf`, `sensitivity.json` (Table V) and
+`correction.json` (Table IV, the held-out adherence-correction experiment).
 
 ## Source of truth
 
@@ -62,6 +63,7 @@ against the repository after the final compile:
 | `PAPER_GUIDE.md` | limitations that had to appear, and venue scoping |
 | `docs/claims_ledger.md` | which claims the evidence supports |
 | `apc-paper/sensitivity.json` | Var[S], noise floor, required k (Table V) |
+| `apc-paper/correction.json` | held-out adherence correction, 200 splits (Table IV) |
 
 ## Scope of the claims
 
@@ -104,6 +106,7 @@ refs.bib           bibliography (all entries arXiv-verified)
 main.pdf           compiled output, 6 pages
 make_figures.py    regenerates figures and sensitivity.json from the ledgers
 sensitivity.json   Var[S], noise floor and required k per family
+correction.json    held-out adherence-correction results, 200 splits
 figures/           three vector figures used by the paper
 IEEEtran.cls       IEEE conference class v1.8b (CTAN)
 IEEEtran.bst       IEEE BibTeX style v1.14 (CTAN)

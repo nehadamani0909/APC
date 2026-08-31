@@ -7,3 +7,4 @@
 *.blg
 *.synctex.gz
 missfont.log
+.DS_Store
