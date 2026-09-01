@@ -178,6 +178,32 @@ def _resource_limits(memory_bytes: int, cpu_seconds: int) -> Callable[[], None] 
     return apply
 
 
+#: A candidate/harness pair that must score 1.0 in a working sandbox.
+_CANARY = ("def f(n):\n    return n * 2\n", "assert f(2) == 4\n")
+
+
+def verify_sandbox() -> None:
+    """Raise if the sandbox rejects code that is known to be correct.
+
+    Every layer of ``sandboxed_code_check`` fails *closed*: a broken rlimit,
+    a missing interpreter, or a scrubbed environment all surface as ``False``,
+    which is indistinguishable from a wrong answer.  A grid run would record
+    that as quality 0.0 for every code instance and produce a corpus whose
+    code families are uniformly, invisibly wrong.
+
+    Call this once before any run that scores code.  It is the difference
+    between a crash and a fabricated result.
+    """
+
+    if not sandboxed_code_check(*_CANARY):
+        raise RuntimeError(
+            "sandboxed_code_check rejected a known-correct canary: the code "
+            "sandbox is broken on this platform. Every code-family quality "
+            "score would be 0.0 and would look like a real measurement. "
+            "Refusing to proceed."
+        )
+
+
 def sandboxed_code_check(
     candidate: str,
     tests: str,
