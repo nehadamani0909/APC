@@ -8,6 +8,7 @@ cross-backend transfer (E7) a free experiment.
 from __future__ import annotations
 
 import importlib.metadata
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -60,6 +61,10 @@ class LLMLinguaAdapter(TextCompressor):
         # Pins the checkpoint into every ledger row and every cache key.
         self.model_version = f"{self.model_name}@{self.model_revision}"
         self._engine: Any = None
+        # Grid workers share one adapter. Without this, each thread races to
+        # build its own PromptCompressor -- 90s and a full model copy each on
+        # MPS, for an object they are all about to share anyway.
+        self._engine_lock = threading.Lock()
 
     def _load_engine(self) -> Any:
         """Load the PromptCompressor once and keep it.
@@ -69,7 +74,11 @@ class LLMLinguaAdapter(TextCompressor):
         impossible one.
         """
 
-        if self._engine is None:
+        if self._engine is not None:
+            return self._engine
+        with self._engine_lock:
+            if self._engine is not None:
+                return self._engine
             try:
                 from llmlingua import PromptCompressor
             except ImportError as exc:
