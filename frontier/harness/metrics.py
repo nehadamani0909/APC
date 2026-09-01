@@ -136,7 +136,23 @@ def _is_statically_safe(tree: ast.AST) -> bool:
 
 
 def _resource_limits(memory_bytes: int, cpu_seconds: int) -> Callable[[], None] | None:
-    """Return a POSIX ``preexec_fn`` applying rlimits, or None on Windows."""
+    """Return a POSIX ``preexec_fn`` applying rlimits, or None on Windows.
+
+    ``RLIMIT_AS`` is deliberately skipped on macOS.  It caps *address space*,
+    not resident memory, and CPython on arm64 Darwin reserves far more than
+    512MB of address space before it reaches the first bytecode -- so the
+    limit does not constrain a runaway allocation, it prevents the
+    interpreter from starting at all.  ``preexec_fn`` then raises inside the
+    fork, ``subprocess.run`` turns that into ``SubprocessError``, and
+    ``sandboxed_code_check`` catches it and returns False.
+
+    That failure mode is silent and total: on macOS *every* candidate scores
+    0.0, correct ones included, and HumanEval/MBPP quality reads as a flat
+    zero that looks like a genuine measurement.  Losing the memory cap on one
+    platform is a far smaller risk than an entire task family silently
+    scoring zero, so the cap is dropped where it cannot work and kept where
+    it can.
+    """
 
     try:
         import resource
@@ -149,12 +165,11 @@ def _resource_limits(memory_bytes: int, cpu_seconds: int) -> Callable[[], None] 
     if setrlimit is None:
         return None
 
+    limits: list[tuple[str, int]] = [("RLIMIT_CPU", cpu_seconds), ("RLIMIT_NPROC", 0)]
+    if sys.platform != "darwin":
+        limits.insert(0, ("RLIMIT_AS", memory_bytes))
+
     def apply() -> None:
-        limits = (
-            ("RLIMIT_AS", memory_bytes),
-            ("RLIMIT_CPU", cpu_seconds),
-            ("RLIMIT_NPROC", 0),
-        )
         for name, value in limits:
             limit = getattr(resource, name, None)
             if limit is not None:
