@@ -1,0 +1,24 @@
+{
+  "model": "llama3.2:latest",
+  "num_ctx": 8192,
+  "compressor": "llmlingua2_base",
+  "device": "cpu",
+  "rates": [
+    1.0,
+    0.8,
+    0.65,
+    0.5,
+    0.4,
+    0.3,
+    0.2
+  ],
+  "samples": 3,
+  "n_per_family": 10,
+  "token_window": [
+    500,
+    3500
+  ],
+  "tokenizer_fallback": true,
+  "cells": 630,
+  "instances": 30
+}
