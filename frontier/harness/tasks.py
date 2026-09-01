@@ -135,32 +135,34 @@ class GSM8KTask(JsonlTask):
         # continues the same Question/Answer pattern the exemplars establish.
         return f"{ctx}\n\nQuestion: {query}\nAnswer:"
 
-    #: The exemplar block joins Question/Answer pairs with a blank line and no
-    #: answer contains one, so a blank line marks the end of this instance's
-    #: answer. Observed continuations are not always "Question:" -- the model
-    #: also invents "### Problem 7:" style headers -- so the blank line is the
-    #: reliable boundary.
-    STOP_SEQUENCES = ("\n\n", "\nQuestion:")
+    #: Markers at which the model has stopped answering *this* question and
+    #: started inventing the next one. A bare blank line is deliberately NOT
+    #: among them: an instruction-tuned model opens with a preamble sentence
+    #: ("To find the total cost, we need to...") and only then a blank line,
+    #: so cutting at the first "\n\n" discards the entire derivation --
+    #: including the answer -- and leaves a fragment with no digits in it.
+    #: ``parse`` then falls back to returning the raw text, which never
+    #: exact-matches a bare numeral, and the whole reason family scores 0.0
+    #: at every budget. That looks exactly like a real compression cliff.
+    STOP_PATTERN = re.compile(
+        r"\n\s*(?:Question:|Q:|Problem\s*\d|#{2,}\s*(?:Problem|Question|Exercise))",
+        re.IGNORECASE,
+    )
 
     def parse(self, raw: str) -> str:
         """Extract the numeric answer from a chain-of-thought response.
 
-        Three failure modes this has to survive.  Without numeric extraction,
-        reasoning text is compared verbatim against a bare numeral.  Without
-        truncating at the answer boundary, a hallucinated follow-up question
-        contributes numbers of its own.  And taking the *last* number rather
-        than the one after the first ``####`` picks up those hallucinations
-        even when the real answer was correct.  Each one flattens the quality
-        curve, and a flat curve makes Gate 1 measure nothing.
+        Order matters. Cut off any hallucinated follow-up question first, so
+        its numbers cannot be mistaken for this answer. Then prefer the
+        ``####`` marker, which is GSM8K's own answer delimiter. Failing that,
+        take the *last* number, which is where a chain of thought puts its
+        conclusion.
         """
 
-        text = raw
-        for stop in self.STOP_SEQUENCES:
-            text = text.split(stop)[0]
+        text = self.STOP_PATTERN.split(raw)[0]
         if "####" in text:
-            # The first marker terminates this instance's answer.
-            text = text.split("####")[1]
-            matches = self._NUMBER.findall(text.replace(",", ""))
+            after = text.split("####")[1]
+            matches = self._NUMBER.findall(after.replace(",", ""))
             if matches:
                 return str(matches[0]).rstrip(".")
         matches = self._NUMBER.findall(text.replace(",", ""))

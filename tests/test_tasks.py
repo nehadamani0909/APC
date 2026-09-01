@@ -44,3 +44,30 @@ def test_gsm8k_parses_the_final_numeric_answer() -> None:
 def test_gsm8k_prompt_continues_the_few_shot_pattern() -> None:
     prompt = GSM8KTask().build_prompt("Question: A?\nAnswer: 1", "B?")
     assert prompt.endswith("Question: B?\nAnswer:")
+
+
+def test_gsm8k_parse_survives_a_preamble_before_the_first_blank_line() -> None:
+    """Regression: an instruction-tuned model opens with a preamble sentence.
+
+    Cutting the response at the first blank line discarded the derivation and
+    left a digit-free fragment, so ``parse`` returned the raw text and every
+    compressed budget scored 0.0 -- indistinguishable from a compression
+    cliff, and wrong.
+    """
+
+    from frontier.harness.tasks import GSM8KTask
+
+    raw = (
+        "To find the total cost, we need to first calculate the discount.\n\n"
+        "Discount = $20 x 0.3 = $6\n"
+        "Discounted price = $20 - $6 = $14\n\n"
+        "Total Cost = $14 x 4\n= $56"
+    )
+    assert GSM8KTask().parse(raw) == "56"
+
+
+def test_gsm8k_parse_still_ignores_a_hallucinated_next_question() -> None:
+    from frontier.harness.tasks import GSM8KTask
+
+    raw = "The answer is 18.\n\nQuestion: unrelated\nAnswer: 99"
+    assert GSM8KTask().parse(raw) == "18"
