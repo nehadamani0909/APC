@@ -19,3 +19,4 @@ htmlcov/
 paper/
 .DS_Store
 PAPER_GUIDE.md
+apc-paper/
